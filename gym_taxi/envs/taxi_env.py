@@ -199,7 +199,6 @@ class TaxiEnv(gym.Env):
         Return drivers from traveling pool.
         Drivers are rewarded instantly after dispatching, so here we do not reward.
         '''
-        logging.info("Drivers released {} for time {}. Travel pool emptied.".format(len(self.traveling_pool[self.time]), self.time))
         assert len(self.traveling_pool[self.time - 1]) == 0, self.time - 1
         for driver in self.traveling_pool[self.time]:
             driver.status = 1
