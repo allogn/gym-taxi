@@ -30,7 +30,7 @@ class TaxiEnv(gym.Env):
                  order_sampling_rate: float,
                  drivers_per_node: Array[int],
                  n_intervals: List,
-                 wc: float,
+                 wc: float = 0,
                  count_neighbors: bool = False,
                  weight_poorest: bool = False,
                  normalize_rewards: bool = True,
@@ -38,39 +38,85 @@ class TaxiEnv(gym.Env):
                  reward_bound: float = None,
                  include_income_to_observation: bool = False,
                  poorest_first: bool = False,
-                 idle_reward: bool = False) -> None:
+                 idle_reward: bool = False,
+                 waiting_time: int = 1) -> None:
         '''
-        :param orders: tuple <source, destination, time, length, price>
-                       source and destination should belong to the world.
-                       time can be greater than n_intervals, random sampling will proceed by the time % n_intervals
-        :param order_sampling_rate: max_time period of orders, used to calculate sampling rate per day
+        :param world: undirected networkx graph that represents spatial cells for drivers to travel
+                        nodes should be enumerated sequntially
+        :param orders: a list of *all* orders during a month or any long period
+                        format: tuple <source, destination, time, length, price>
+                        source and destination should belong to the world.
+                        time can be greater than n_intervals, random sampling will proceed by the time % n_intervals
+        :param order_sampling_rate: fraction of orders to sample per time step. 
+                        For example, if n_intervals = intervals per day, orders are per 30 days, then sampling_rate=1/30
+                        means orders will be sampled with average density per time step
+        :param drivers_per_node: a distribution of drivers per node
+        :param n_intervals: number of time intervals per day
+        :param wc: walk cost, a cost of taxi relocation for 1 hop
+        :param count_neighbors: an option that allows drivers to match with neighbour cells
+        :param weight_poorest: multiply reward of each car by softmax of their income so far
+        :param normalize_rewards: divide a reward per cell by number of cars in a cell
+        :param minimum_reward: return reward as minimum income per driver per cell
+        :param reward_bound: return reward such that no car can earn more than this bound
+        :param include_income_to_observation: observation includes car income distribution
+        :param poorest_first: assignment strategy such that poorest drivers get assigned first
+        :param idle_reward: reward by the time a driver is idle rather than by income
+        :param waiting_time: number of time steps customers can wait for a taxi
+
+        Usage:
+        A policy decides where for an idle (free) driver to go.
+        step() function returns observation for the next state, reward for parforming the step, 
+        done=True if the next state is the final one (time of the next state = n_intervals)
+        and a dict with additional information on the new state and transition.
+
+        reset() returns initial observation. This function is required for Gym.
+        get_reset_info() returns additional info about the initial step. 
+        Note that done might be equal to True right after initialization, so the external check is required.
+
+        Simulator maintains a time counter. Time is increased once there are no idle drivers to decide upon.
+        Time can possibly increase from 0 to n_intervals. Calling step() further results in error.
+
+        If there is no idle drivers to decide upon up to the time=n_intervals, then done=True is returned immediately.
+        This means that number of step()'s is might not be equal to n_intevals*number of nodes
         '''
 
+        # Setting simulator parameters
         super(TaxiEnv, self).__init__()
         self.world = nx.Graph(world)
         self.world_size = len(self.world)
         for i in range(self.world_size):
             assert self.world.has_node(i) # check world node ids are sequential
-            # assert 'coords' in self.world.nodes[i] -- only for rengering
-            self.world.nodes[i]['info'] = Node(i)
+            self.world.nodes[i]['info'] = Node(i) # initiating basic information per node
 
         self.n_intervals = n_intervals
+        assert n_intervals > 0
+
         self.order_sampling_rate = order_sampling_rate
-        self.drivers_per_node = drivers_per_node
+        assert order_sampling_rate > 0 and order_sampling_rate <= 1
+
         self.n_drivers = np.sum(drivers_per_node)
-        self.all_driver_list = []
+        assert self.n_drivers >= 0
+
         self.wc = wc
+        assert self.wc >= 0
+
+        self.waiting_time = waiting_time
+        assert waiting_time == 1, "Waiting time != 1 is not implemented"
+
         self.poorest_first = poorest_first
         self.idle_reward = idle_reward
-        self.minimum_reward = minimum_reward # return reward as minimum income per driver per cell
-        self.reward_bound = reward_bound # return reward such that no car can earn more than this bound
-        self.weight_poorest = weight_poorest # multiply reward of each car by softmax of their income so far
+        self.minimum_reward = minimum_reward 
+        self.reward_bound = reward_bound
+        self.weight_poorest = weight_poorest 
         self.count_neighbors = count_neighbors
-        self.normalize_rewards = normalize_rewards # divide rewards by number of cars in a cell
+        self.normalize_rewards = normalize_rewards
         self.include_income_to_observation = include_income_to_observation
-        assert drivers_per_node.dtype == int
-        assert drivers_per_node.shape == (self.world_size,)
 
+        self.drivers_per_node = np.array(drivers_per_node)
+        assert self.drivers_per_node.dtype == int
+        assert self.drivers_per_node.shape == (self.world_size,)
+
+        self.all_driver_list = []
         self.set_orders_per_time_interval(orders)
 
         # set action space
@@ -78,7 +124,7 @@ class TaxiEnv(gym.Env):
         self.action_space = spaces.Box(low=0, high=1, shape=(self.max_degree+1,))
         self.action_space_shape = (self.max_degree+1,)
 
-        # set observation space
+        # set observation space:
         self.observation_space_shape = 3*self.world_size + self.n_intervals
         if self.include_income_to_observation:
             self.observation_space_shape += 3
@@ -89,51 +135,54 @@ class TaxiEnv(gym.Env):
 
     def reset(self) -> Array[int]:
         self.time = 0
+        self.done = False
         self.traveling_pool = {} # lists of drivers in traveling state, indexed by arrival time
         for i in range(self.n_intervals+1):
             self.traveling_pool[i] = []
         self.bootstrap_orders()
         self.bootstrap_drivers()
-        drivers_are_not_empty = self.update_current_node_id()
-        assert not drivers_are_not_empty, "There is no drivers at time=0"
+        self.update_current_node_id()
         obs, _, _ = self.get_observation()
         return obs
 
     def get_reset_info(self):
         obs, driver_max, order_max = self.get_observation()
-        return {"served_orders": 0, "driver normalization constant": driver_max, "order normalization constant": order_max}
+        return {"served_orders": 0, 
+                "driver normalization constant": driver_max, 
+                "order normalization constant": order_max}
 
     def step(self, action: Array[float]) -> Tuple[Array[int], float, bool, Dict]:
-        assert self.time < self.n_intervals, "{}, {}".format(self.time, self.n_intervals) # done is False
-        assert action.shape == self.action_space.shape, self.action_space.shape
+        if self.done:
+            raise Exception("Trying to step terminated environment. Call reset first.")
+        assert self.time < self.n_intervals
+        assert action.shape == self.action_space.shape, (action.shape, self.action_space.shape)
 
-        # if self.world.nodes[self.current_node_id]['info'].get_driver_num() > 0:
         dispatch_actions = self.get_dispatch_actions_from_action(action)
         dispatch_actions_with_drivers = self.dispatch_drivers(dispatch_actions)
         reward = self.calculate_reward(dispatch_actions_with_drivers)
-        # else:
-        #     reward = 0
 
-        done = False
-        while self.update_current_node_id() and not done: # while there is no drivers to manage at current iteration
+        while self.update_current_node_id() and not self.done: # while there is no drivers to manage at current iteration
             self.time += 1
+            self.done = self.time == self.n_intervals
             self.driver_status_control()  # drivers finish order become available again.
+            if self.done:
+                break
             self.bootstrap_orders()
-            done = self.time == self.n_intervals
-            # break # nice idea to avoid empty drivers, but in solvers each step MUST be only one time forward
 
         observation, driver_max, order_max = self.get_observation()
-        info = {"served_orders": self.served_orders, "driver normalization constant": driver_max, "order normalization constant": order_max}
-        return observation, reward, done, info
+        info = {"served_orders": self.served_orders, 
+                "driver normalization constant": driver_max, 
+                "order normalization constant": order_max}
+        return observation, reward, self.done, info
 
     def set_orders_per_time_interval(self, orders: Tuple[int, int, int, int, float]) -> None:
         self.orders_per_time_interval = {}
         max_reward = 0
-        for i in range(self.n_intervals+1):
+        for i in range(self.n_intervals+1): # last element is not filled and used to store final results
             self.orders_per_time_interval[i] = []
         for order in orders:
             max_reward = max(max_reward, order[4])
-            t = order[2] % self.n_intervals # last time moment (self.orders_per_time_interval[self.n_intervals]) is dummy and is not filled
+            t = order[2] % self.n_intervals
             self.orders_per_time_interval[t].append(tuple(order))
         self.max_reward = max_reward
 

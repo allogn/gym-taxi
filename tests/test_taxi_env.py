@@ -7,19 +7,36 @@ from gym_taxi.envs.taxi_env import TaxiEnv
 class TestTaxiEnv:
 
     def testInit(self):
+        '''
+        Test initialization of driver and order distributions
+        '''
+        # initialize input parameters
         g = nx.Graph()
-        g.add_edges_from([(0,1)])
-        nx.set_node_attributes(g, {0: (0,1), 1: (1,2)}, "coords")
-        orders = [(1,1,1,1,0.5)]
-        drivers = np.ones((2), dtype=int)
-        env = TaxiEnv(g, orders, 1, drivers, 10, 0.5)
-        env.step(np.zeros(2))
+        g.add_edges_from([(0,1),(1,2),(0,2),(2,3)])
+        orders = [(1,1,0,1,0.5), (1,1,1,1,0.7)] # <source, destination, time, length, price>
+        drivers = [0,1,2,3]
+        order_sampling_rate = 1
+        n_intervals = 3
+        env = TaxiEnv(g, orders, order_sampling_rate, drivers, n_intervals)
+        assert env.n_drivers == 6
+        assert len(env.all_driver_list) == env.n_drivers
+        assert env.max_reward == 0.7
+        assert len(env.orders_per_time_interval) == n_intervals+1
+        assert env.max_degree == 3
+        assert env.action_space_shape == (4,)
+        assert env.done == False
+        assert env.time == 0
+        assert len(env.world) == 4
+        assert sum([env.drivers_per_node[i] for i in range(4)]) == 6
+        assert sum([env.world.nodes[i]['info'].get_driver_num() for i in range(4)]) == 6
+        assert sum([env.world.nodes[i]['info'].get_order_num() for i in range(4)]) == 1
 
-    def testMove3CarsStrictly(self):
+    def testMove3CarsStrictly(self): 
         g = nx.Graph()
         N = 9
         g.add_edges_from([(0,1), (1,2), (0,3), (1,4), (2,5), (3,4), (4,5), (3,6), (4,7), (5,8), (6,7), (7,8)])
-        nx.set_node_attributes(g, {0: (0,0), 1: (0,1), 2: (0,2), 3: (1,0), 4: (1,1), 5: (1,2), 6: (2,0), 7: (2,1), 8: (2,2)}, "coords")
+        nx.set_node_attributes(g, {0: (0,0), 1: (0,1), 2: (0,2), 3: (1,0),
+                                     4: (1,1), 5: (1,2), 6: (2,0), 7: (2,1), 8: (2,2)}, "coords")
         orders = [(7,3,0,2,999.4)]
         drivers = np.zeros(N, dtype=int)
         drivers[0] = 1
