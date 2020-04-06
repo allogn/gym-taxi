@@ -6,12 +6,6 @@ import numpy as np
 import networkx as nx
 import math
 from collections import Counter
-import imageio
-
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvasAgg
-import matplotlib
-matplotlib.use('Agg')
 
 import logging
 logger = logging.getLogger(__name__)
@@ -38,7 +32,8 @@ class TaxiEnv(gym.Env):
                  reward_bound: float = None,
                  include_income_to_observation: bool = False,
                  poorest_first: bool = False,
-                 idle_reward: bool = False) -> None:
+                 idle_reward: bool = False, 
+                 include_prematch: bool = False) -> None: 
         '''
         :param world: undirected networkx graph that represents spatial cells for drivers to travel
                         nodes should be enumerated sequntially
@@ -60,6 +55,7 @@ class TaxiEnv(gym.Env):
         :param include_income_to_observation: observation includes car income distribution
         :param poorest_first: assignment strategy such that poorest drivers get assigned first
         :param idle_reward: reward by the time a driver is idle rather than by income
+        :param include_prematch: include the number of idle drivers into observations (together with the total number)
 
         Change self.DEBUG to False in __init__() to disable consistency checks per iteration.
 
@@ -76,8 +72,11 @@ class TaxiEnv(gym.Env):
         Simulator maintains a time counter. Time is increased once there are no idle drivers to decide upon.
         Time can possibly increase from 0 to n_intervals. Calling step() further results in error.
 
-        If there is no idle drivers to decide upon up to the time=n_intervals, then done=True is returned immediately.
+        If there is no drivers to decide upon up to the time=n_intervals, then done=True is returned immediately.
         This means that number of step()'s is might not be equal to n_intevals*number of nodes
+
+        Important note: although a policy influences only idle drivers, rewards and steps are defined for any 
+        available drivers. That is, if all drivers are dispatched, we still count the step as valid.
         '''
         self.DEBUG = True
 
@@ -119,19 +118,22 @@ class TaxiEnv(gym.Env):
 
         # set action space
         self.max_degree = np.max([d[1] for d in nx.degree(self.world)])
-        self.action_space = spaces.Box(low=0, high=1, shape=(self.max_degree+1,))
         self.action_space_shape = (self.max_degree+1,)
+        self.action_space = spaces.Box(low=0, high=1, shape=self.action_space_shape)
 
-        # set observation space:
+        # set observation space: distribution of drivers, orders, current cell and current time
         self.observation_space_shape = 3*self.world_size + self.n_intervals
         if self.include_income_to_observation:
+            # optionally with mean,avg,min incomes
             self.observation_space_shape += 3
         self.observation_space_shape = (self.observation_space_shape,)
 
         self.observation_space = spaces.Box(low=0, high=1, shape=self.observation_space_shape)
-        self.reset()
+        self.init()
 
-    def reset(self) -> Array[int]:
+    def init(self):
+        # this function is separated from reset() because taxi_env_batch overrides reset
+        # and initialization of taxi_env_batch otherwise produce error due to wrong call to wrong reset
         self.time = 0
         self.done = False
         self.traveling_pool = {} # lists of drivers in traveling state, indexed by arrival time
@@ -140,6 +142,9 @@ class TaxiEnv(gym.Env):
         self.bootstrap_orders()
         self.bootstrap_drivers()
         self.update_current_node_id()
+
+    def reset(self) -> Array[int]:
+        self.init()
         obs, _, _ = self.get_observation()
         return obs
 
@@ -410,7 +415,7 @@ class TaxiEnv(gym.Env):
         context = np.array([remain_drivers_1d, remain_orders_1d])
         return context
 
-    def update_current_node_id(self) -> bool:
+    def update_current_node_id(self) -> bool: #todo another problem: we need to consider nodes with non-zero drivers for dispatching
         '''
         Update node for dispatching: pick a random node with non-zero drivers.
         Since considered cells must have zero drivers - simply select random cell out of non-empty
@@ -435,8 +440,9 @@ class TaxiEnv(gym.Env):
     def get_observation(self):
         '''
         :return: feature vector consisting of
-            <driver distr, order distr, diff drivers, diff orders, one-hot time, one-hot location, mean/min/max income (optional)>
-            driver_max and order_max (for reconering full driver distribution)
+            <driver distr, order distr, one-hot time, 
+                one-hot location, mean/min/max income/idle (optional)>
+            driver_max and order_max (for recovering full driver distribution)
         '''
         next_state = self.get_driver_and_order_distr()
         # context = self.compute_remaining_drivers_and_orders(next_state)
@@ -454,24 +460,8 @@ class TaxiEnv(gym.Env):
         #observation[3*self.world_size:4*self.world_size] = context[1,:]
         observation[2*self.world_size:2*self.world_size+self.n_intervals] = time_one_hot
         observation[2*self.world_size+self.n_intervals:3*self.world_size+self.n_intervals] = onehot_grid_id
-
         if self.include_income_to_observation:
-            if self.idle_reward == False:
-                driver_incomes = [d.get_income()/(self.time+1) for d in self.world.nodes[self.current_node_id]['info'].drivers]
-                min_income = -self.wc
-                max_income = self.max_reward
-                d = max_income - min_income
-
-                observation[-3] = (np.mean(driver_incomes) - min_income)/d
-                observation[-2] = (np.min(driver_incomes) - min_income)/d
-                observation[-1] = (np.max(driver_incomes) - min_income)/d
-            else:
-                driver_idle = [d.get_not_idle_periods()/(self.time+1) for d in self.world.nodes[self.current_node_id]['info'].drivers]
-                observation[-3] = (np.mean(driver_idle))
-                observation[-2] = (np.min(driver_idle))
-                observation[-1] = (np.max(driver_idle))
-            assert np.min(observation[-3:]) >= 0, observation[-3:]
-            assert np.max(observation[-3:]) <= 1, observation[-3:]
+            observation[-3:] = self.get_income_per_node(self.current_node_id)
 
         driver_max = np.max(observation[:self.world_size])
         order_max =  np.max(observation[self.world_size:2*self.world_size])
@@ -484,27 +474,33 @@ class TaxiEnv(gym.Env):
 
         return observation, driver_max, order_max
 
-    def render(self, mode='rgb_array'):
-        fig = plt.figure()
-        ax = fig.gca()
-        ax.axis('off')
+    def get_income_per_node(self, node_id):
+        income = np.zeros(3)
+        if self.idle_reward == False:
+            driver_incomes = [d.get_income()/(self.time+1) for d in self.world.nodes[node_id]['info'].drivers]
+            # normalization by time+1 because, e.g., during first steps time is not increased, but drivers earn already
+            min_income = -self.wc
+            max_income = self.max_reward
+            d = max_income - min_income
 
-        x = np.zeros((2, self.world_size))
-        for i in range(self.world_size):
-            x[0, i] = self.world.nodes[i]['coords'][0]
-            x[1, i] = self.world.nodes[i]['coords'][1]
+            if self.world.nodes[node_id]['info'].get_driver_num() == 0:
+                driver_incomes = [0]
 
-        plt.scatter(x[0,:], x[1,:])
-        #plt.arrow(self.position, 0, self.last_move*0.5, 0, length_includes_head=True, head_width=0.003, head_length=0.2) #x,y,dx,dy
+            income[-3] = (np.mean(driver_incomes) - min_income)/d
+            income[-2] = (np.min(driver_incomes) - min_income)/d
+            income[-1] = (np.max(driver_incomes) - min_income)/d
+        else:
+            driver_idle = [d.get_not_idle_periods()/(self.time+1) for d in self.world.nodes[node_id]['info'].drivers]
 
-        canvas = FigureCanvasAgg(fig)
-        canvas.draw()
-        s, (width, height) = canvas.print_to_buffer()
+            if self.world.nodes[node_id]['info'].get_driver_num() == 0:
+                driver_incomes = [0]
 
-        # Option 2a: Convert to a NumPy array
-        X = np.frombuffer(s, np.uint8).reshape((height, width, 4))
-        plt.close(fig)
-        return X
+            income[-3] = (np.mean(driver_idle))
+            income[-2] = (np.min(driver_idle))
+            income[-1] = (np.max(driver_idle))
+        assert np.min(income[-3:]) >= 0, income[-3:]
+        assert np.max(income[-3:]) <= 1, income[-3:]
+        return income
 
     def seed(self, seed):
         np.random.seed(seed)
