@@ -38,8 +38,7 @@ class TaxiEnv(gym.Env):
                  reward_bound: float = None,
                  include_income_to_observation: bool = False,
                  poorest_first: bool = False,
-                 idle_reward: bool = False,
-                 waiting_time: int = 1) -> None:
+                 idle_reward: bool = False) -> None:
         '''
         :param world: undirected networkx graph that represents spatial cells for drivers to travel
                         nodes should be enumerated sequntially
@@ -61,7 +60,8 @@ class TaxiEnv(gym.Env):
         :param include_income_to_observation: observation includes car income distribution
         :param poorest_first: assignment strategy such that poorest drivers get assigned first
         :param idle_reward: reward by the time a driver is idle rather than by income
-        :param waiting_time: number of time steps customers can wait for a taxi
+
+        Change self.DEBUG to False in __init__() to disable consistency checks per iteration.
 
         Usage:
         A policy decides where for an idle (free) driver to go.
@@ -79,6 +79,7 @@ class TaxiEnv(gym.Env):
         If there is no idle drivers to decide upon up to the time=n_intervals, then done=True is returned immediately.
         This means that number of step()'s is might not be equal to n_intevals*number of nodes
         '''
+        self.DEBUG = True
 
         # Setting simulator parameters
         super(TaxiEnv, self).__init__()
@@ -99,9 +100,6 @@ class TaxiEnv(gym.Env):
 
         self.wc = wc
         assert self.wc >= 0
-
-        self.waiting_time = waiting_time
-        assert waiting_time == 1, "Waiting time != 1 is not implemented"
 
         self.poorest_first = poorest_first
         self.idle_reward = idle_reward
@@ -161,8 +159,10 @@ class TaxiEnv(gym.Env):
         dispatch_actions_with_drivers = self.dispatch_drivers(dispatch_actions)
         reward = self.calculate_reward(dispatch_actions_with_drivers)
 
+        time_updated = False
         while self.update_current_node_id() and not self.done: # while there is no drivers to manage at current iteration
             self.time += 1
+            time_updated = True
             self.done = self.time == self.n_intervals
             self.driver_status_control()  # drivers finish order become available again.
             if self.done:
@@ -173,6 +173,9 @@ class TaxiEnv(gym.Env):
         info = {"served_orders": self.served_orders, 
                 "driver normalization constant": driver_max, 
                 "order normalization constant": order_max}
+
+        if self.DEBUG:
+            self.check_consistency(time_updated)
         return observation, reward, self.done, info
 
     def set_orders_per_time_interval(self, orders: Tuple[int, int, int, int, float]) -> None:
@@ -363,7 +366,7 @@ class TaxiEnv(gym.Env):
                     if a[2] <= 0:
                         driver_reward = 0
                     else:
-                        driver_reward = d.inc_idle()
+                        driver_reward = d.inc_not_idle()
                 else:
                     driver_reward = d.add_income(a[2])
 
@@ -463,7 +466,7 @@ class TaxiEnv(gym.Env):
                 observation[-2] = (np.min(driver_incomes) - min_income)/d
                 observation[-1] = (np.max(driver_incomes) - min_income)/d
             else:
-                driver_idle = [d.get_idle_period()/(self.time+1) for d in self.world.nodes[self.current_node_id]['info'].drivers]
+                driver_idle = [d.get_not_idle_periods()/(self.time+1) for d in self.world.nodes[self.current_node_id]['info'].drivers]
                 observation[-3] = (np.mean(driver_idle))
                 observation[-2] = (np.min(driver_idle))
                 observation[-1] = (np.max(driver_idle))
@@ -519,11 +522,40 @@ class TaxiEnv(gym.Env):
         return np.sum([d.get_income() for d in self.all_driver_list])
 
     def get_min_idle(self):
-        return np.min([d.get_idle_period() for d in self.all_driver_list])
+        return np.min([d.get_not_idle_periods() for d in self.all_driver_list])
 
     def get_total_idle(self):
-        return np.sum([d.get_idle_period() for d in self.all_driver_list])
+        return np.sum([d.get_not_idle_periods() for d in self.all_driver_list])
 
     def set_income_bound(self, bound):
         for d in self.all_driver_list:
             d.income_bound = bound
+
+    def check_consistency(self, time_updated: bool):
+        assert len(self.all_driver_list) == self.n_drivers
+        free_drivers = sum([n[1]['info'].get_driver_num() for n in self.world.nodes(data=True)])
+        busy_drivers = sum([len(self.traveling_pool[i]) for i in range(self.n_intervals+1)])
+        assert sum([len(self.traveling_pool[i]) for i in range(self.time)]) == 0
+        assert self.n_drivers == free_drivers + busy_drivers
+        for i in range(self.n_intervals+1):
+            for d in self.traveling_pool[i]:
+                assert d.status == 0
+        for n in self.world.nodes(data=True):
+            for d in n[1]['info'].drivers:
+                assert d.status == 1
+                assert d.position == n[0]
+                if self.reward_bound is not None:
+                    assert d.income_bound == self.reward_bound
+
+        if time_updated: # all orders should be bootstraped
+            expected_orders = 0
+            for n in self.world.nodes(data=True):
+                l = [r for r in self.orders_per_time_interval[self.time] if r[0] == n[0]]
+                expected_orders += int(self.order_sampling_rate * len(l))
+            assert expected_orders == sum([n[1]['info'].get_order_num() for n in self.world.nodes(data=True)])
+
+        for d in self.all_driver_list:
+            if d.status == 1: # driver hasn't moved in this time interval
+                assert d.income >= -self.wc*(self.time - d.get_not_idle_periods())
+            if d.get_not_idle_periods() > 0:
+                assert d.income > 0

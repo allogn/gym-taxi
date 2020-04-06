@@ -10,6 +10,7 @@ class Node:
         self.orders += [r for r in order_list]
 
     def add_driver(self, driver):
+        driver.position = self.node_id
         self.drivers.append(driver)
 
     def clear_orders(self):

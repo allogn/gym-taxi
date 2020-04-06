@@ -6,14 +6,14 @@ class Driver:
         self.driver_id = driver_id
         self.status = 1 # 1 : online (idle), 0 : traveling
         self.income_bound = income_bound
-        self.idle_period = 0 # inversed!!!! since we need to maximize this, then idle is how much he was not idle!
+        self.not_idle_periods = 0
 
-    def inc_idle(self):
-        self.idle_period += 1
-        return self.get_idle_period()
+    def inc_not_idle(self):
+        self.not_idle_periods += 1
+        return self.get_not_idle_periods()
 
-    def get_idle_period(self):
-        return self.idle_period
+    def get_not_idle_periods(self):
+        return self.not_idle_periods
 
     def add_income(self, s):
         t = self.get_income()
