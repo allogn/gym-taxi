@@ -522,6 +522,9 @@ class TaxiEnv(gym.Env):
     def get_total_idle(self):
         return np.sum([d.get_not_idle_periods() for d in self.all_driver_list])
 
+    def get_action_space_shape(self):
+        return self.action_space_shape
+
     def set_income_bound(self, bound):
         for d in self.all_driver_list:
             d.income_bound = bound

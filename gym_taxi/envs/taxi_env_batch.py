@@ -112,3 +112,6 @@ class TaxiEnvBatch(TaxiEnv):
                         "idle_reward": float(np.mean([d.get_not_idle_periods() for d in self.all_driver_list])),
                         "min_idle": float(np.min([d.get_not_idle_periods() for d in self.all_driver_list]))}
         return global_observation, global_reward, self.done, global_info
+
+    def get_action_space_shape(self):
+        return self.global_action_space_shape
