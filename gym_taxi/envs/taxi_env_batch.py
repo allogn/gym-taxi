@@ -72,6 +72,7 @@ class TaxiEnvBatch(TaxiEnv):
             raise Exception("Trying to step terminated environment. Call reset first.")
 
         cells_with_nonzero_drivers = np.sum([1 for n in self.world.nodes(data=True) if n[1]['info'].get_driver_num() > 0])
+        assert cells_with_nonzero_drivers > 0, "Step of a batch Env is defined only for non-zero idle driver distribution"
         nodes_with_orders = np.sum([1 for n in self.world.nodes(data=True) if n[1]['info'].get_order_num() > 0])
         total_orders = np.sum([n[1]['info'].get_order_num() for n in self.world.nodes(data=True)])
 
@@ -99,8 +100,8 @@ class TaxiEnvBatch(TaxiEnv):
             assert i == cells_with_nonzero_drivers-1 or self.done == False
 
         global_observation = self.get_global_observation()
-        assert not self.done or self.time == self.n_intervals
-        assert self.time == init_t + 1
+        assert (not self.done) or (self.time == self.n_intervals)
+        assert self.time > init_t # has to be incremented, but might have several steps passed (if no drivers to control/dispatch)
 
         global_info = {"reward_per_node": reward_per_node,
                         "served_orders": total_served_orders,
@@ -115,3 +116,12 @@ class TaxiEnvBatch(TaxiEnv):
 
     def get_action_space_shape(self):
         return self.global_action_space_shape
+
+    def print_observation(self):
+        global_observation = self.get_global_observation()
+        print("Driver distribution:", global_observation[:self.world_size])
+        print("Order distribution:", global_observation[self.world_size:self.world_size*2])
+        t = 2*self.world_size+self.n_intervals
+        print("One-Hot Time:", global_observation[self.world_size*2:t])
+        if self.include_income_to_observation:
+            print("Incomes:", global_observation[t:])

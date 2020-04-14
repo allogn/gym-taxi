@@ -137,7 +137,7 @@ class TaxiEnv(gym.Env):
         self.time = 0
         self.done = False
         self.traveling_pool = {} # lists of drivers in traveling state, indexed by arrival time
-        for i in range(self.n_intervals+1):
+        for i in range(self.n_intervals+1): # the last element contains all drivers arriving out of the episode
             self.traveling_pool[i] = []
         self.bootstrap_orders()
         self.bootstrap_drivers()
@@ -362,8 +362,10 @@ class TaxiEnv(gym.Env):
                 d.status = 0
                 arrival_time = self.time + a[3]
                 assert(a[3] > 0)
-                if arrival_time <= self.n_intervals:
+                if arrival_time < self.n_intervals:
                     self.traveling_pool[arrival_time].append(d)
+                else:
+                    self.traveling_pool[self.n_intervals].append(d)
                 i += 1
 
                 if self.idle_reward:
@@ -414,7 +416,7 @@ class TaxiEnv(gym.Env):
         context = np.array([remain_drivers_1d, remain_orders_1d])
         return context
 
-    def update_current_node_id(self) -> bool: #todo another problem: we need to consider nodes with non-zero drivers for dispatching
+    def update_current_node_id(self) -> bool: 
         '''
         Update node for dispatching: pick a random node with non-zero drivers.
         Since considered cells must have zero drivers - simply select random cell out of non-empty
@@ -534,7 +536,7 @@ class TaxiEnv(gym.Env):
         free_drivers = sum([n[1]['info'].get_driver_num() for n in self.world.nodes(data=True)])
         busy_drivers = sum([len(self.traveling_pool[i]) for i in range(self.n_intervals+1)])
         assert sum([len(self.traveling_pool[i]) for i in range(self.time)]) == 0
-        assert self.n_drivers == free_drivers + busy_drivers
+        assert self.n_drivers == free_drivers + busy_drivers, (self.n_drivers, free_drivers, busy_drivers)
         for i in range(self.n_intervals+1):
             for d in self.traveling_pool[i]:
                 assert d.status == 0
@@ -545,12 +547,14 @@ class TaxiEnv(gym.Env):
                 if self.reward_bound is not None:
                     assert d.income_bound == self.reward_bound
 
-        if time_updated: # all orders should be bootstraped
+         # all orders should be bootstraped, except for the last time step
             expected_orders = 0
+        if time_updated and self.time < self.n_intervals:
             for n in self.world.nodes(data=True):
                 l = [r for r in self.orders_per_time_interval[self.time] if r[0] == n[0]]
                 expected_orders += int(self.order_sampling_rate * len(l))
-            assert expected_orders == sum([n[1]['info'].get_order_num() for n in self.world.nodes(data=True)])
+            number_of_orders = sum([n[1]['info'].get_order_num() for n in self.world.nodes(data=True)])
+            assert expected_orders == number_of_orders, (expected_orders, number_of_orders)
 
         for d in self.all_driver_list:
             if d.status == 1: # driver hasn't moved in this time interval
