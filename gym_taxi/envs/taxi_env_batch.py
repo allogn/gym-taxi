@@ -84,10 +84,12 @@ class TaxiEnvBatch(TaxiEnv):
         max_driver = None
         max_order = None
 
+        last_info = {} # info of the last step should be the correct one
         for i in range(cells_with_nonzero_drivers):
             a = self.current_node_id*self.action_space_shape[0]
             action_per_cell = action[a:a+self.action_space_shape[0]]
             _, reward, done, info = super(TaxiEnvBatch, self).step(action_per_cell)
+            last_info = info
 
             reward_per_node[self.current_node_id] = reward
             global_reward += reward
@@ -109,9 +111,8 @@ class TaxiEnvBatch(TaxiEnv):
                         "nodes_with_orders": nodes_with_orders,
                         "driver normalization constant": max_driver,
                         "order normalization constant": max_order,
-                        "total_orders": total_orders,
-                        "idle_reward": float(np.mean([d.get_not_idle_periods() for d in self.all_driver_list])),
-                        "min_idle": float(np.min([d.get_not_idle_periods() for d in self.all_driver_list]))}
+                        "total_orders": total_orders}
+        global_info.update(last_info)
         return global_observation, global_reward, self.done, global_info
 
     def get_action_space_shape(self):

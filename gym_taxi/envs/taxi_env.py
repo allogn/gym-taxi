@@ -175,9 +175,13 @@ class TaxiEnv(gym.Env):
             self.bootstrap_orders()
 
         observation, driver_max, order_max = self.get_observation()
+        non_idle_periods = [d.get_not_idle_periods() for d in self.all_driver_list]
+        
         info = {"served_orders": self.served_orders, 
                 "driver normalization constant": driver_max, 
-                "order normalization constant": order_max}
+                "order normalization constant": order_max,
+                "idle_reward": float(np.mean(non_idle_periods)),
+                "min_idle": float(np.min(non_idle_periods))}
 
         if self.DEBUG:
             self.check_consistency(time_updated)
@@ -368,13 +372,15 @@ class TaxiEnv(gym.Env):
                     self.traveling_pool[self.n_intervals].append(d)
                 i += 1
 
+                if a[2] > 0: # if income is positive, then a customer is served
+                    d.inc_not_idle() # so increase non-idle time periods
+                non_idle_times = d.get_not_idle_periods()
+                driver_total_income = d.add_income(a[2])
+
                 if self.idle_reward:
-                    if a[2] <= 0:
-                        driver_reward = 0
-                    else:
-                        driver_reward = d.inc_not_idle()
+                    driver_reward = non_idle_times
                 else:
-                    driver_reward = d.add_income(a[2])
+                    driver_reward = driver_total_income
 
                 if self.reward_bound is not None:
                     dispatch_actions_with_drivers.append([a[0], 1, driver_reward, a[3], [d.driver_id]])
