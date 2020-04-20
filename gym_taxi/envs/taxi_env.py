@@ -6,6 +6,10 @@ import numpy as np
 import networkx as nx
 import math
 from collections import Counter
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvasAgg
+import matplotlib
+matplotlib.use('Agg')
 
 import logging
 logger = logging.getLogger(__name__)
@@ -142,6 +146,8 @@ class TaxiEnv(gym.Env):
         self.bootstrap_orders()
         self.bootstrap_drivers()
         self.update_current_node_id()
+        self.last_timestep_dispatch = {} # container for dispatch actions, used in plotting
+        self.this_timestep_dispatch = {} # extra container so that each time we can plot for t-1, and save for this t
 
     def reset(self) -> Array[int]:
         self.init()
@@ -162,11 +168,18 @@ class TaxiEnv(gym.Env):
 
         dispatch_actions = self.get_dispatch_actions_from_action(action)
         dispatch_actions_with_drivers = self.dispatch_drivers(dispatch_actions)
+
+        for d in dispatch_actions_with_drivers:
+            k = (self.current_node_id, d[0])
+            self.this_timestep_dispatch[k] = self.this_timestep_dispatch.get(k,0) + d[1] 
+
         reward = self.calculate_reward(dispatch_actions_with_drivers)
 
         time_updated = False
         while self.update_current_node_id() and not self.done: # while there is no drivers to manage at current iteration
             self.time += 1
+            self.last_timestep_dispatch = self.this_timestep_dispatch
+            self.this_timestep_dispatch = {}
             time_updated = True
             self.done = self.time == self.n_intervals
             self.driver_status_control()  # drivers finish order become available again.
@@ -567,3 +580,68 @@ class TaxiEnv(gym.Env):
                 assert d.income >= -self.wc*(self.time - d.get_not_idle_periods())
             if d.get_not_idle_periods() > 0:
                 assert d.income > 0
+
+    def render(self):
+        '''
+        Return a single image
+        A mode where an image is plotted in a popup window is not implemented
+        '''
+        fig = plt.figure()
+        ax = fig.gca()
+        ax.axis('off')
+
+        # if coords are not available
+        for n in self.world.nodes(data=True):
+            if 'coords' not in n[1]:
+                NotImplementedError("Implement adding coords if missing")
+
+        x = np.zeros((2, self.world_size))
+
+        observation, driver_max, order_max = self.get_observation()
+
+        c = []
+        c_border = []
+        for i in range(self.world_size):
+            x[0, i] = self.world.nodes[i]['coords'][0]
+            x[1, i] = self.world.nodes[i]['coords'][1]
+            # dots are number of orders, borders around dots are drivers
+            c.append(observation[i+self.world_size])
+            c_border.append(observation[i])
+
+        cmap = matplotlib.cm.get_cmap('Greens')
+        cmap_e = matplotlib.cm.get_cmap('cool')
+        c_border = [cmap(j) for j in c_border]
+
+        plt.scatter(x[0,:], x[1,:], c=c, s=200, linewidth=3, edgecolors=c_border, cmap="Reds")
+        if len(self.last_timestep_dispatch) == 0:
+            edge_norm = 1
+        else:
+            edge_norm = max([val for k, val in self.last_timestep_dispatch.items()])
+        for e in self.world.edges():
+
+            flow = self.last_timestep_dispatch.get((e[0], e[1]),0) - self.last_timestep_dispatch.get((e[1], e[0]),0)
+            if flow >= 0:
+                c1 = self.world.nodes[e[0]]['coords']
+                c2 = self.world.nodes[e[1]]['coords']
+            else:
+                c1 = self.world.nodes[e[1]]['coords']
+                c2 = self.world.nodes[e[0]]['coords']
+                flow *= -1
+
+            edge_w = flow / edge_norm * 256
+            if flow == 0:
+                plt.plot([c1[0],c2[0]],[c1[1],c2[1]],color="grey")
+            else:
+                plt.arrow(c1[0], c1[1], c2[0]-c1[0], c2[1]-c1[1], color=cmap_e(edge_w), lw=0.5,
+                            length_includes_head=True, head_width=0.003, head_length=0.3) #x,y,dx,dy
+
+        plt.title("t={}".format(self.time))
+       
+        canvas = FigureCanvasAgg(fig)
+        canvas.draw()
+        s, (width, height) = canvas.print_to_buffer()
+
+        # Option 2a: Convert to a NumPy array
+        X = np.frombuffer(s, np.uint8).reshape((height, width, 4))
+        plt.close(fig)
+        return X
