@@ -70,12 +70,6 @@ class TaxiEnvBatch(TaxiEnv):
     def step(self, action: Array[float]) -> Tuple[Array[int], float, bool, Dict]:
         if self.done:
             raise Exception("Trying to step terminated environment. Call reset first.")
-
-        cells_with_nonzero_drivers = np.sum([1 for n in self.world.nodes(data=True) if n[1]['info'].get_driver_num() > 0])
-        assert cells_with_nonzero_drivers > 0, "Step of a batch Env is defined only for non-zero idle driver distribution"
-        nodes_with_orders = np.sum([1 for n in self.world.nodes(data=True) if n[1]['info'].get_order_num() > 0])
-        total_orders = np.sum([n[1]['info'].get_order_num() for n in self.world.nodes(data=True)])
-
         global_reward = 0
         reward_per_node = np.zeros(self.world_size)
         init_t = self.time
@@ -83,7 +77,7 @@ class TaxiEnvBatch(TaxiEnv):
         total_served_orders = 0
         max_driver = None
         max_order = None
-
+        cells_with_nonzero_drivers = np.sum([1 for n in self.world.nodes(data=True) if n[1]['info'].get_driver_num() > 0])
         last_info = {} # info of the last step should be the correct one
         for i in range(cells_with_nonzero_drivers):
             a = self.current_node_id*self.action_space_shape[0]
@@ -107,11 +101,9 @@ class TaxiEnvBatch(TaxiEnv):
 
         global_info = {"reward_per_node": reward_per_node,
                         "served_orders": total_served_orders,
-                        "nodes_with_drivers": cells_with_nonzero_drivers,
-                        "nodes_with_orders": nodes_with_orders,
                         "driver normalization constant": max_driver,
-                        "order normalization constant": max_order,
-                        "total_orders": total_orders}
+                        "order normalization constant": max_order
+                        }
         global_info.update(last_info)
         return global_observation, global_reward, self.done, global_info
 

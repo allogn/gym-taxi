@@ -20,7 +20,7 @@ from gym_taxi.envs.driver import Driver
 ActionList = List[Tuple[int, int, float, int]]
 
 class TaxiEnv(gym.Env):
-    metadata = {'render.modes': ['rgb_array']}
+    metadata = {'render.modes': ['rgb_array', 'fig']}
 
     def __init__(self,
                  world: nx.Graph,
@@ -149,6 +149,17 @@ class TaxiEnv(gym.Env):
         self.last_timestep_dispatch = {} # container for dispatch actions, used in plotting
         self.this_timestep_dispatch = {} # extra container so that each time we can plot for t-1, and save for this t
 
+        self.episode_logs = {
+            'order_response_rates': [],
+            'nodes_with_drivers': [],
+            'nodes_with_orders': [],
+            'min_income': [],
+            'rewards': [],
+            'min_idle': [],
+            'idle_reward': [],
+            'total_income': []
+        }
+
     def reset(self) -> Array[int]:
         self.init()
         obs, _, _ = self.get_observation()
@@ -195,10 +206,32 @@ class TaxiEnv(gym.Env):
                 "order normalization constant": order_max,
                 "idle_reward": float(np.mean(non_idle_periods)),
                 "min_idle": float(np.min(non_idle_periods))}
+        info["total_orders"] = np.sum([n[1]['info'].get_order_num() for n in self.world.nodes(data=True)])
+        info["nodes_with_orders"] = np.sum([1 for n in self.world.nodes(data=True) if n[1]['info'].get_order_num() > 0])
+        info["nodes_with_drivers"] = np.sum([1 for n in self.world.nodes(data=True) if n[1]['info'].get_driver_num() > 0])
+
+        self.episode_logs["order_response_rates"].append(float(info['served_orders']/(info['total_orders']+0.0001)))
+        self.episode_logs["nodes_with_drivers"].append(int(info['nodes_with_drivers']))
+        self.episode_logs["nodes_with_orders"].append(int(info['nodes_with_orders']))
+        self.episode_logs["min_income"].append(self.get_min_revenue())
+        self.episode_logs["total_income"].append(self.get_total_revenue())
+        self.episode_logs["rewards"].append(reward)
+        self.episode_logs["idle_reward"].append(info['idle_reward'])
+        self.episode_logs["min_idle"].append(float(info['min_idle']))
 
         if self.DEBUG:
             self.check_consistency(time_updated)
         return observation, reward, self.done, info
+
+    def get_episode_info(self):
+        # # take only subset of images
+        # # we don't know how many of them in total, so we render all
+        # images = [images[i] for i in range(0,len(images),len(images)//5)]
+        # # env can go through several time steps per iteration, not no more than n_interations
+        # assert it <= self.time_periods, (it, self.time_periods)
+        # figure = self.artist.combine_drawings(images)
+
+        return self.episode_logs
 
     def set_orders_per_time_interval(self, orders: Tuple[int, int, int, int, float]) -> None:
         self.orders_per_time_interval = {}
@@ -581,7 +614,7 @@ class TaxiEnv(gym.Env):
             if d.get_not_idle_periods() > 0:
                 assert d.income > 0
 
-    def render(self):
+    def render(self, mode='rgb_array'):
         '''
         Return a single image
         A mode where an image is plotted in a popup window is not implemented
@@ -636,6 +669,9 @@ class TaxiEnv(gym.Env):
                             length_includes_head=True, head_width=0.003, head_length=0.3) #x,y,dx,dy
 
         plt.title("t={}".format(self.time))
+
+        if mode == "fig":
+            return fig
        
         canvas = FigureCanvasAgg(fig)
         canvas.draw()
