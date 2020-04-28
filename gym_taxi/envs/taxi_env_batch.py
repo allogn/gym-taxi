@@ -65,6 +65,7 @@ class TaxiEnvBatch(TaxiEnv):
                 offset = 3*i
                 v = self.get_income_per_node(i)
                 global_observation[size_without_income+offset:size_without_income+offset+3] = v
+        assert (global_observation >= 0).all() and (global_observation <= 1).all()
         return global_observation
 
     def step(self, action: Array[float]) -> Tuple[Array[int], float, bool, Dict]:
@@ -109,6 +110,9 @@ class TaxiEnvBatch(TaxiEnv):
 
     def get_action_space_shape(self):
         return self.global_action_space_shape
+
+    def get_observation_space_shape(self):
+        return self.global_observation_space_shape
 
     def print_observation(self):
         global_observation = self.get_global_observation()

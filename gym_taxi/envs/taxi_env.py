@@ -139,6 +139,7 @@ class TaxiEnv(gym.Env):
         # this function is separated from reset() because taxi_env_batch overrides reset
         # and initialization of taxi_env_batch otherwise produce error due to wrong call to wrong reset
         self.time = 0
+        self.total_steps = 0
         self.done = False
         self.traveling_pool = {} # lists of drivers in traveling state, indexed by arrival time
         for i in range(self.n_intervals+1): # the last element contains all drivers arriving out of the episode
@@ -151,13 +152,12 @@ class TaxiEnv(gym.Env):
 
         self.episode_logs = {
             'order_response_rates': [],
+            'number_of_idle_drivers': [],
+            'number_of_served_orders': [],
             'nodes_with_drivers': [],
             'nodes_with_orders': [],
-            'min_income': [],
             'rewards': [],
-            'min_idle': [],
-            'idle_reward': [],
-            'total_income': []
+            "total_steps": 0.
         }
 
     def reset(self) -> Array[int]:
@@ -178,6 +178,12 @@ class TaxiEnv(gym.Env):
         assert action.shape == self.action_space.shape, (action.shape, self.action_space.shape)
 
         dispatch_actions = self.get_dispatch_actions_from_action(action)
+
+        # number of actions should be equal to number of idle drivers, since
+        # idle operation is a special case of dispatch operation
+        assert sum([a[1] for a in dispatch_actions]) == self.world.nodes[self.current_node_id]['info'].get_driver_num(), \
+                    (dispatch_actions, self.world.nodes[self.current_node_id]['info'].get_driver_num())
+
         dispatch_actions_with_drivers = self.dispatch_drivers(dispatch_actions)
 
         for d in dispatch_actions_with_drivers:
@@ -193,13 +199,17 @@ class TaxiEnv(gym.Env):
             self.this_timestep_dispatch = {}
             time_updated = True
             self.done = self.time == self.n_intervals
-            self.driver_status_control()  # drivers finish order become available again.
+            # before we update status, every car should be travelling
+            if self.DEBUG:
+                for d in self.all_driver_list:
+                    assert d.status == 0, d
+            self.driver_status_control()  # drivers that finish an order become available again.
             if self.done:
                 break
             self.bootstrap_orders()
 
         observation, driver_max, order_max = self.get_observation()
-        non_idle_periods = [d.get_not_idle_periods() for d in self.all_driver_list]
+        non_idle_periods = [float(d.get_not_idle_periods()) for d in self.all_driver_list]
         
         info = {"served_orders": self.served_orders, 
                 "driver normalization constant": driver_max, 
@@ -210,17 +220,21 @@ class TaxiEnv(gym.Env):
         info["nodes_with_orders"] = np.sum([1 for n in self.world.nodes(data=True) if n[1]['info'].get_order_num() > 0])
         info["nodes_with_drivers"] = np.sum([1 for n in self.world.nodes(data=True) if n[1]['info'].get_driver_num() > 0])
 
+        self.episode_logs["number_of_idle_drivers"].append(sum([a[1] for a in dispatch_actions if a[2] <= 0]))
+        assert self.served_orders == sum([a[1] for a in dispatch_actions if a[2] > 0])
+        self.episode_logs["number_of_served_orders"].append(self.served_orders)
         self.episode_logs["order_response_rates"].append(float(info['served_orders']/(info['total_orders']+0.0001)))
         self.episode_logs["nodes_with_drivers"].append(int(info['nodes_with_drivers']))
         self.episode_logs["nodes_with_orders"].append(int(info['nodes_with_orders']))
-        self.episode_logs["min_income"].append(self.get_min_revenue())
-        self.episode_logs["total_income"].append(self.get_total_revenue())
-        self.episode_logs["rewards"].append(reward)
-        self.episode_logs["idle_reward"].append(info['idle_reward'])
-        self.episode_logs["min_idle"].append(float(info['min_idle']))
+        self.episode_logs["driver_income"] = [float(d.income) for d in self.all_driver_list]
+        self.episode_logs["driver_income_bounded"] = [float(d.get_income()) for d in self.all_driver_list]
+        self.episode_logs["rewards"].append(float(reward))
+        self.episode_logs["total_steps"] += 1. # total calls to "step" function
+        self.episode_logs["idle_periods"] = non_idle_periods # distribution of non-idle-periods over drivers at the last iteration
 
         if self.DEBUG:
-            self.check_consistency(time_updated)
+            # time increased, some drivers must avait for instructions or it is done
+            self.check_consistency(time_updated) 
         return observation, reward, self.done, info
 
     def get_episode_info(self):
@@ -251,7 +265,7 @@ class TaxiEnv(gym.Env):
         '''
         assert len(self.traveling_pool[self.time - 1]) == 0, self.time - 1
         for driver in self.traveling_pool[self.time]:
-            driver.status = 1
+            driver.set_active()
             self.world.nodes[driver.position]['info'].add_driver(driver)
         self.traveling_pool[self.time] = []
 
@@ -275,7 +289,7 @@ class TaxiEnv(gym.Env):
             assert driver_num >= 0
             n[1]['info'].clear_drivers()
             for i in range(driver_num):
-                driver = Driver(len(self.all_driver_list), self.reward_bound)
+                driver = Driver(len(self.all_driver_list), self, self.reward_bound)
                 self.all_driver_list.append(driver)
                 n[1]['info'].add_driver(driver)
 
@@ -408,8 +422,8 @@ class TaxiEnv(gym.Env):
 
             for j in range(a[1]):
                 d = drivers[i]
-                d.position = a[0]
-                d.status = 0
+                d.update_position(a[0])
+                d.set_inactive()
                 arrival_time = self.time + a[3]
                 assert(a[3] > 0)
                 if arrival_time < self.n_intervals:
@@ -419,22 +433,26 @@ class TaxiEnv(gym.Env):
                 i += 1
 
                 if a[2] > 0: # if income is positive, then a customer is served
+                    # otherwise it was moved as a part of cruising
                     d.inc_not_idle() # so increase non-idle time periods
-                non_idle_times = d.get_not_idle_periods()
-                driver_total_income = d.add_income(a[2])
+                non_idle_times_increase = d.get_not_idle_periods()
+                driver_total_income_increase = d.add_income(a[2])
 
                 if self.idle_reward:
-                    driver_reward = non_idle_times
+                    driver_reward = non_idle_times_increase
                 else:
-                    driver_reward = driver_total_income
+                    driver_reward = driver_total_income_increase
 
                 if self.reward_bound is not None:
+                    # if we bound the max income of a driver, then we add each driver independently,
+                    # since their income might differ depending on their history
                     dispatch_actions_with_drivers.append([a[0], 1, driver_reward, a[3], [d.driver_id]])
                 added_drivers.append(d.driver_id)
 
             if self.reward_bound is None:
+                # if we don't bound ther income of a driver, then we return the action and the list of assigned drivers
                 dispatch_actions_with_drivers.append([ai for ai in a] + [added_drivers])
-        node.clear_drivers() # those who stay, they "arrive" to the same node at next iteration
+        node.clear_drivers()
         return dispatch_actions_with_drivers
 
     def compute_remaining_drivers_and_orders(self, driver_customer_distr: Array[int]) -> Array[int]:
@@ -524,7 +542,8 @@ class TaxiEnv(gym.Env):
             order_max = 1
         observation[:self.world_size] /= driver_max
         observation[self.world_size:2*self.world_size] /= order_max
-
+        
+        assert (observation >= 0).all() and (observation <= 1).all()
         return observation, driver_max, order_max
 
     def get_income_per_node(self, node_id):
@@ -579,11 +598,15 @@ class TaxiEnv(gym.Env):
     def get_action_space_shape(self):
         return self.action_space_shape
 
+    def get_observation_space_shape(self):
+        return self.observation_space_shape
+
     def set_income_bound(self, bound):
         for d in self.all_driver_list:
             d.income_bound = bound
 
     def check_consistency(self, time_updated: bool):
+        # this is run at the end of a step
         assert len(self.all_driver_list) == self.n_drivers
         free_drivers = sum([n[1]['info'].get_driver_num() for n in self.world.nodes(data=True)])
         busy_drivers = sum([len(self.traveling_pool[i]) for i in range(self.n_intervals+1)])
@@ -608,11 +631,13 @@ class TaxiEnv(gym.Env):
             number_of_orders = sum([n[1]['info'].get_order_num() for n in self.world.nodes(data=True)])
             assert expected_orders == number_of_orders, (expected_orders, number_of_orders)
 
+        # Some nodes might have been considered in this time step already, some might not be.
+        # Since for each considered node we update status to inactive, then
+        # Those who are active have not been processed in the current time step yet
         for d in self.all_driver_list:
-            if d.status == 1: # driver hasn't moved in this time interval
-                assert d.income >= -self.wc*(self.time - d.get_not_idle_periods())
-            if d.get_not_idle_periods() > 0:
-                assert d.income > 0
+            if d.status == 1: # driver hasn't moved in this time interval (their node hasn't been processed)
+                # Their income should be consistent to the current time interval
+                assert d.income >= -self.wc*(self.time - d.get_not_idle_periods()), d
 
     def render(self, mode='rgb_array'):
         '''
