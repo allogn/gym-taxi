@@ -4,6 +4,7 @@ from nptyping import Array
 from gym import spaces
 import numpy as np
 import networkx as nx
+import copy
 import math
 from collections import Counter
 import matplotlib.pyplot as plt
@@ -83,6 +84,7 @@ class TaxiEnv(gym.Env):
         available drivers. That is, if all drivers are dispatched, we still count the step as valid.
         '''
         self.DEBUG = True
+        self.number_of_resets = 0
 
         # Setting simulator parameters
         super(TaxiEnv, self).__init__()
@@ -133,7 +135,19 @@ class TaxiEnv(gym.Env):
         self.observation_space_shape = (self.observation_space_shape,)
 
         self.observation_space = spaces.Box(low=0, high=1, shape=self.observation_space_shape)
+        self.reset_episode_logs()
         self.init()
+
+    def reset_episode_logs(self):
+        self.episode_logs = {
+            'order_response_rates': [],
+            'number_of_idle_drivers': [],
+            'number_of_served_orders': [],
+            'nodes_with_drivers': [],
+            'nodes_with_orders': [],
+            'rewards': [],
+            "total_steps": 0.
+        }
 
     def init(self):
         # this function is separated from reset() because taxi_env_batch overrides reset
@@ -150,20 +164,16 @@ class TaxiEnv(gym.Env):
         self.last_timestep_dispatch = {} # container for dispatch actions, used in plotting
         self.this_timestep_dispatch = {} # extra container so that each time we can plot for t-1, and save for this t
 
-        self.episode_logs = {
-            'order_response_rates': [],
-            'number_of_idle_drivers': [],
-            'number_of_served_orders': [],
-            'nodes_with_drivers': [],
-            'nodes_with_orders': [],
-            'rewards': [],
-            "total_steps": 0.
-        }
+        self.reset_episode_logs()
 
     def reset(self) -> Array[int]:
+        self.number_of_resets += 1
         self.init()
         obs, _, _ = self.get_observation()
         return obs
+
+    def get_number_of_resets(self):
+        return self.number_of_resets
 
     def get_reset_info(self):
         obs, driver_max, order_max = self.get_observation()
@@ -207,6 +217,7 @@ class TaxiEnv(gym.Env):
             if self.done:
                 break
             self.bootstrap_orders()
+        
 
         observation, driver_max, order_max = self.get_observation()
         non_idle_periods = [float(d.get_not_idle_periods()) for d in self.all_driver_list]
@@ -232,20 +243,16 @@ class TaxiEnv(gym.Env):
         self.episode_logs["total_steps"] += 1. # total calls to "step" function
         self.episode_logs["idle_periods"] = non_idle_periods # distribution of non-idle-periods over drivers at the last iteration
 
+        if self.done:
+            self.last_episode_logs = copy.deepcopy(self.episode_logs)
+
         if self.DEBUG:
             # time increased, some drivers must avait for instructions or it is done
             self.check_consistency(time_updated) 
         return observation, reward, self.done, info
 
     def get_episode_info(self):
-        # # take only subset of images
-        # # we don't know how many of them in total, so we render all
-        # images = [images[i] for i in range(0,len(images),len(images)//5)]
-        # # env can go through several time steps per iteration, not no more than n_interations
-        # assert it <= self.time_periods, (it, self.time_periods)
-        # figure = self.artist.combine_drawings(images)
-
-        return self.episode_logs
+        return self.last_episode_logs
 
     def set_orders_per_time_interval(self, orders: Tuple[int, int, int, int, float]) -> None:
         self.orders_per_time_interval = {}
