@@ -136,6 +136,7 @@ class TaxiEnv(gym.Env):
 
         self.observation_space = spaces.Box(low=0, high=1, shape=self.observation_space_shape)
         self.reset_episode_logs()
+        self.last_episode_logs = None
         self.init()
 
     def reset_episode_logs(self):
