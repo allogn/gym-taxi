@@ -693,12 +693,12 @@ class TaxiEnv(gym.Env):
                 c2 = self.world.nodes[e[0]]['coords']
                 flow *= -1
 
-            edge_w = flow / edge_norm * 256
+            edge_w = flow / edge_norm
             if flow == 0:
                 plt.plot([c1[0],c2[0]],[c1[1],c2[1]],color="grey")
             else:
-                plt.arrow(c1[0], c1[1], c2[0]-c1[0], c2[1]-c1[1], color=cmap_e(edge_w), lw=0.5,
-                            length_includes_head=True, head_width=0.003, head_length=0.3) #x,y,dx,dy
+                plt.arrow(c1[0], c1[1], c2[0]-c1[0], c2[1]-c1[1], color=cmap_e(edge_w), lw=0.7,
+                            length_includes_head=True, head_width=0.04, head_length=0.4) #x,y,dx,dy
 
         plt.title("t={}".format(self.time))
 
