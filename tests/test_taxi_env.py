@@ -211,3 +211,53 @@ class TestTaxiEnv:
         assert observation[-3] == (0.45 + 0.5) / delta # mean
         assert observation[-2] == (0 + 0.5) / delta # min
         assert observation[-1] == (0.9 + 0.5) / delta # max
+
+    def test_seeding(self):
+        g = nx.Graph()
+        g.add_edges_from([(0,1),(1,2),(2,3)])
+        nx.set_node_attributes(g, {0: (0,1), 1: (0,2), 2: (1,1), 3: (1,2)}, name="coords")
+        orders = [(0,1,0,1,1), (1,1,1,2,2), (2,2,1,3,3), (3,2,2,3,3)]
+        drivers = np.array([1,0,0,5])
+        action = np.array([0.3, 0.4, 0.3], dtype=float)
+
+        obs, rew, done, info = None, None, None, None 
+        for i in range(100):
+            env = TaxiEnv(g, orders, 1, drivers, 10, seed=123)
+            env.step(action)
+            obs2, rew2, done2, info2 = env.step(action)
+            if i > 0:
+                assert (obs == obs2).all()
+                assert rew == rew2
+                assert done == done2
+                assert info == info2
+            obs, rew, done, info = obs2, rew2, done2, info2
+
+    def test_sync(self):
+        g = nx.Graph()
+        g.add_edges_from([(0,1),(1,2),(2,3)])
+        nx.set_node_attributes(g, {0: (0,1), 1: (0,2), 2: (1,1), 3: (1,2)}, name="coords")
+        orders = [(0,1,0,1,1), (1,1,1,2,2), (2,2,1,3,3), (3,2,2,3,3)]
+        drivers = np.array([1,0,0,5])
+        action = np.array([0.3, 0.4, 0.3], dtype=float)
+
+        env = TaxiEnv(g, orders, 1, drivers, 10)
+        env.step(action)
+
+        env2 = TaxiEnv(g, orders, 1, drivers, 10)
+        env2.sync(env)
+
+        o1, _, _ = env.get_observation() 
+        o2, _, _ = env2.get_observation()
+        assert (o1 == o2).all()
+        
+        env.seed(1)
+        env2.seed(1)
+
+        while not env.done:
+            obs, rew, done, info  = env.step(action)
+            obs2, rew2, done2, info2 = env2.step(action)
+            
+            assert (obs == obs2).all()
+            assert rew == rew2
+            assert done == done2
+            assert info == info2

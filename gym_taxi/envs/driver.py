@@ -1,3 +1,5 @@
+import copy
+
 class Driver:
 
     def __init__(self, driver_id, env, income_bound = None):
@@ -47,6 +49,15 @@ class Driver:
             return self.income
         else:
             return min(self.income_bound, self.income)
+
+    def sync(self, another_driver):
+        assert self.driver_id == another_driver.driver_id
+        self.history = copy.deepcopy(another_driver.history)
+        self.income = another_driver.income
+        self.income_bound = another_driver.income_bound
+        self.position = another_driver.position
+        self.status = another_driver.status
+        self.not_idle_periods = another_driver.not_idle_periods
 
     def __str__(self):
         return "t={}: Driver {}: Income {}, Position {}, Status {}, IncBound {}.\n History: {}".format(

@@ -38,7 +38,8 @@ class TaxiEnv(gym.Env):
                  include_income_to_observation: bool = False,
                  poorest_first: bool = False,
                  idle_reward: bool = False, 
-                 include_prematch: bool = False) -> None: 
+                 include_prematch: bool = False,
+                 seed: int = None) -> None: 
         '''
         :param world: undirected networkx graph that represents spatial cells for drivers to travel
                         nodes should be enumerated sequntially
@@ -61,6 +62,7 @@ class TaxiEnv(gym.Env):
         :param poorest_first: assignment strategy such that poorest drivers get assigned first
         :param idle_reward: reward by the time a driver is idle rather than by income
         :param include_prematch: include the number of idle drivers into observations (together with the total number)
+        :param seed: seed for a random state
 
         Change self.DEBUG to False in __init__() to disable consistency checks per iteration.
 
@@ -83,6 +85,7 @@ class TaxiEnv(gym.Env):
         Important note: although a policy influences only idle drivers, rewards and steps are defined for any 
         available drivers. That is, if all drivers are dispatched, we still count the step as valid.
         '''
+        self.seed(seed)
         self.DEBUG = True
         self.number_of_resets = 0
 
@@ -120,6 +123,7 @@ class TaxiEnv(gym.Env):
         assert self.drivers_per_node.shape == (self.world_size,)
 
         self.all_driver_list = []
+        self.driver_dict = {}
         self.set_orders_per_time_interval(orders)
 
         # set action space
@@ -183,10 +187,18 @@ class TaxiEnv(gym.Env):
                 "order normalization constant": order_max}
 
     def step(self, action: Array[float]) -> Tuple[Array[int], float, bool, Dict]:
+        """
+        :returns: observation, reward, done, info
+        """
         if self.done:
             raise Exception("Trying to step terminated environment. Call reset first.")
         assert self.time < self.n_intervals
         assert action.shape == self.action_space.shape, (action.shape, self.action_space.shape)
+
+        info = {}
+        info["total_orders"] = np.sum([n[1]['info'].get_order_num() for n in self.world.nodes(data=True)])
+        info["nodes_with_orders"] = np.sum([1 for n in self.world.nodes(data=True) if n[1]['info'].get_order_num() > 0])
+        info["nodes_with_drivers"] = np.sum([1 for n in self.world.nodes(data=True) if n[1]['info'].get_driver_num() > 0])
 
         dispatch_actions = self.get_dispatch_actions_from_action(action)
 
@@ -223,18 +235,17 @@ class TaxiEnv(gym.Env):
         observation, driver_max, order_max = self.get_observation()
         non_idle_periods = [float(d.get_not_idle_periods()) for d in self.all_driver_list]
         
-        info = {"served_orders": self.served_orders, 
+        info2 = {"served_orders": self.served_orders, 
                 "driver normalization constant": driver_max, 
                 "order normalization constant": order_max,
                 "idle_reward": float(np.mean(non_idle_periods)),
                 "min_idle": float(np.min(non_idle_periods))}
-        info["total_orders"] = np.sum([n[1]['info'].get_order_num() for n in self.world.nodes(data=True)])
-        info["nodes_with_orders"] = np.sum([1 for n in self.world.nodes(data=True) if n[1]['info'].get_order_num() > 0])
-        info["nodes_with_drivers"] = np.sum([1 for n in self.world.nodes(data=True) if n[1]['info'].get_driver_num() > 0])
+        info.update(info2)
 
         self.episode_logs["number_of_idle_drivers"].append(sum([a[1] for a in dispatch_actions if a[2] <= 0]))
         assert self.served_orders == sum([a[1] for a in dispatch_actions if a[2] > 0])
         self.episode_logs["number_of_served_orders"].append(self.served_orders)
+        assert info['total_orders'] >= info['served_orders']
         self.episode_logs["order_response_rates"].append(float(info['served_orders']/(info['total_orders']+0.0001)))
         self.episode_logs["nodes_with_drivers"].append(int(info['nodes_with_drivers']))
         self.episode_logs["nodes_with_orders"].append(int(info['nodes_with_orders']))
@@ -286,7 +297,7 @@ class TaxiEnv(gym.Env):
             n[1]['info'].clear_orders()
             l = [r for r in self.orders_per_time_interval[self.time] if r[0] == n[0]]
             s = int(self.order_sampling_rate * len(l))
-            random_orders_ind = np.random.choice(np.arange(len(l)), size=s)
+            random_orders_ind = self.random.choice(np.arange(len(l)), size=s)
             random_orders = np.array(l)[random_orders_ind]
             n[1]['info'].add_orders(random_orders)
 
@@ -299,6 +310,7 @@ class TaxiEnv(gym.Env):
             for i in range(driver_num):
                 driver = Driver(len(self.all_driver_list), self, self.reward_bound)
                 self.all_driver_list.append(driver)
+                self.driver_dict[driver.driver_id] = driver
                 n[1]['info'].add_driver(driver)
 
     def calculate_reward(self, dispatch_actions_with_drivers: ActionList) -> float:
@@ -359,7 +371,7 @@ class TaxiEnv(gym.Env):
 
         actionlist = []
         if idle_drivers > 0:
-            targets = Counter(np.random.choice(neighbors, idle_drivers, p=masked_action))
+            targets = Counter(self.random.choice(neighbors, idle_drivers, p=masked_action))
             for k in targets:
                 actionlist.append((k, targets[k], -self.wc, 1))
 
@@ -386,7 +398,7 @@ class TaxiEnv(gym.Env):
             leftover_drivers = node.get_driver_num() - len(dispatch_list)
             if leftover_drivers > 0:
                 neighbor_list = list(self.world.neighbors(self.current_node_id))
-                np.random.shuffle(neighbor_list)
+                self.random.shuffle(neighbor_list)
                 # assign orders from neighbors if neighbors have not enough drivers
                 for n in neighbor_list:
                     nnode = self.world.nodes[n]['info']
@@ -421,7 +433,7 @@ class TaxiEnv(gym.Env):
             drivers_with_income.sort(key=lambda x: x[1])
             drivers = [x[0] for x in drivers_with_income]
         else:
-            np.random.shuffle(drivers)
+            self.random.shuffle(drivers)
 
         i = 0
         for a in dispatch_action_list:
@@ -505,7 +517,7 @@ class TaxiEnv(gym.Env):
         non_empty_nodes = [n[0] for n in self.world.nodes(data=True) if n[1]['info'].get_driver_num() > 0]
         if len(non_empty_nodes) == 0:
             return True
-        self.current_node_id = np.random.choice(non_empty_nodes)
+        self.current_node_id = self.random.choice(non_empty_nodes)
         return False
 
     def get_driver_and_order_distr(self) -> Array[int]:
@@ -582,8 +594,8 @@ class TaxiEnv(gym.Env):
         assert np.max(income[-3:]) <= 1, income[-3:]
         return income
 
-    def seed(self, seed):
-        np.random.seed(seed)
+    def seed(self, seed = None):
+        self.random = np.random.RandomState(seed)
 
     @staticmethod
     def softmax(x):
@@ -714,3 +726,41 @@ class TaxiEnv(gym.Env):
         X = np.frombuffer(s, np.uint8).reshape((height, width, 4))
         plt.close(fig)
         return X
+
+    def sync(self, another_env):
+        '''
+        Syncronize status of this environment with another environment build on the same data
+        '''
+        # update each driver
+        for d in self.all_driver_list:
+            d.sync(another_env.driver_dict[d.driver_id])
+
+        # update traveling pool
+        for time, driver_list in another_env.traveling_pool.items():
+            self.traveling_pool[time] = [self.driver_dict[d.driver_id] for d in driver_list]
+
+        self.time = another_env.time
+        self.episode_logs = copy.deepcopy(another_env.episode_logs)
+        self.current_node_id = another_env.current_node_id
+        self.done = another_env.done
+        self.last_episode_logs = another_env.last_episode_logs
+        self.number_of_resets = another_env.number_of_resets
+        self.last_timestep_dispatch = copy.deepcopy(another_env.last_timestep_dispatch)
+        for n in self.world.nodes(data=True):
+            n[1]['info'].sync(another_env.world.nodes[n[0]]['info'], self.driver_dict)
+
+        # syncronize sampled orders (because they might have been sampled differently)
+        self.orders_per_time_interval = copy.deepcopy(another_env.orders_per_time_interval)
+
+    def set_view(self, nodes):
+        """
+        This set a view of this environment so that only a subset of nodes are visible from outside of this class.
+        This is used in SplitSolver to build subsolvers.
+
+        :param nodes: a subset of nodes to preserve in the world.
+        """
+        self.view = set(nodes)
+        # self.subgraph_ind_old_to_new = {}
+        # self.subgraph_ind_new_to_old = nodes
+        # for i in range(len(nodes)):
+        #     self.subgraph_node_index[nodes[i]] = i

@@ -1,4 +1,5 @@
 import numpy as np
+import copy
 
 class Node:
     def __init__(self, node_id):
@@ -34,6 +35,11 @@ class Node:
         selected = self.orders[:number_of_orders]
         self.orders = self.orders[number_of_orders:]
         return selected
+
+    def sync(self, another_node, driver_dict):
+        self.clear_drivers()
+        self.drivers = [driver_dict[d.driver_id] for d in another_node.drivers]
+        self.orders = copy.deepcopy(another_node.orders)
 
     def __str__(self):
         return "Node {}: Drivers {}, Orders {}".format(self.node_id, self.get_driver_num(), self.get_order_num())
