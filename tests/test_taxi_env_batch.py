@@ -31,12 +31,6 @@ class TestTaxiEnvBatch:
         assert env.traveling_pool[2][0].income == 0.75
         assert env.traveling_pool[2][0].status == 0
 
-        # driver distr, order distr, one-hot time, mean/min/max income
-        incomes = np.array([-0.5,-0.5,-0.5, 0,0,0, 0,0,0, -0.5,-0.5,-0.5])/2 # time normalization
-        incomes = (incomes+0.5)/(0.75 + 0.5)
-        true = np.concatenate((np.array([2/4,0,0,4/4, 0,0,0,0, 0,1,0,0]), incomes))
-        assert (observation == np.array(true)).all()
-
         observation, reward, done, info = env.step(action)
         assert done == False
 

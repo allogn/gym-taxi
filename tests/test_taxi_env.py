@@ -52,8 +52,8 @@ class TestTaxiEnv:
         assert (observation[N:2*N] == order_distr).all()
         onehot_time = np.zeros(3)
         onehot_time[0] = 1
-        assert (observation[2*N:2*N+3] == onehot_time).all()
-        node_id =  np.argmax(observation[2*N+3:3*N+3])
+        assert (observation[3*N:3*N+3] == onehot_time).all()
+        node_id =  np.argmax(observation[3*N+3:4*N+3])
         assert node_id in [0, 2, 7]
 
         env.current_node_id = 0
@@ -80,8 +80,8 @@ class TestTaxiEnv:
         assert (observation[N:2*N] == order_distr).all()
         new_drivers[2] = 0
         assert (observation[:N] == new_drivers/np.max(new_drivers)).all()
-        assert (observation[2*N:2*N+3] == onehot_time).all()
-        assert np.argmax(observation[2*N+3:3*N+3]) == 7
+        assert (observation[3*N:3*N+3] == onehot_time).all()
+        assert np.argmax(observation[3*N+3:4*N+3]) == 7
         action = np.zeros(5)
         action[1] = 1
         observation, reward, done, info = env.step(action)
@@ -206,11 +206,7 @@ class TestTaxiEnv:
         # all drivers from 3rd node are moved but haven't arrived, so observation should show only the driver at 0's node
         observation, reward, done, info = env.step(action)
         assert env.current_node_id == 0
-        assert observation.shape[0] == 3*env.world_size + env.n_intervals + 3
-        delta = 0.5 + 3
-        assert observation[-3] == (0.45 + 0.5) / delta # mean
-        assert observation[-2] == (0 + 0.5) / delta # min
-        assert observation[-1] == (0.9 + 0.5) / delta # max
+        assert observation.shape[0] == 5*env.world_size + env.n_intervals
 
     def test_seeding(self):
         g = nx.Graph()

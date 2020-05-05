@@ -38,7 +38,6 @@ class TaxiEnv(gym.Env):
                  include_income_to_observation: bool = False,
                  poorest_first: bool = False,
                  idle_reward: bool = False, 
-                 include_prematch: bool = False,
                  seed: int = None) -> None: 
         '''
         :param world: undirected networkx graph that represents spatial cells for drivers to travel
@@ -61,7 +60,6 @@ class TaxiEnv(gym.Env):
         :param include_income_to_observation: observation includes car income distribution
         :param poorest_first: assignment strategy such that poorest drivers get assigned first
         :param idle_reward: reward by the time a driver is idle rather than by income
-        :param include_prematch: include the number of idle drivers into observations (together with the total number)
         :param seed: seed for a random state
 
         Change self.DEBUG to False in __init__() to disable consistency checks per iteration.
@@ -132,10 +130,10 @@ class TaxiEnv(gym.Env):
         self.action_space = spaces.Box(low=0, high=1, shape=self.action_space_shape)
 
         # set observation space: distribution of drivers, orders, current cell and current time
-        self.observation_space_shape = 3*self.world_size + self.n_intervals
+        self.observation_space_shape = 4*self.world_size + self.n_intervals
         if self.include_income_to_observation:
             # optionally with mean,avg,min incomes
-            self.observation_space_shape += 3
+            self.observation_space_shape += self.world_size
         self.observation_space_shape = (self.observation_space_shape,)
 
         self.observation_space = spaces.Box(low=0, high=1, shape=self.observation_space_shape)
@@ -475,9 +473,11 @@ class TaxiEnv(gym.Env):
         node.clear_drivers()
         return dispatch_actions_with_drivers
 
-    def compute_remaining_drivers_and_orders(self, driver_customer_distr: Array[int]) -> Array[int]:
+    def compute_remaining_drivers_and_orders(self, driver_customer_distr: Array[int, int]) -> Array[int, int]:
         '''
-        former step_pre_order_assigin from CityReal
+        Helper function
+        :param driver_customer_distr: an array of shape <2, world_size>, where first column is driver distr, second - order distr
+        :return: an array of shape <2, world_size> with remaining drivers, customers
         '''
 
         remain_drivers = driver_customer_distr[0] - driver_customer_distr[1]
@@ -530,13 +530,13 @@ class TaxiEnv(gym.Env):
 
     def get_observation(self):
         '''
-        :return: feature vector consisting of
-            <driver distr, order distr, one-hot time, 
-                one-hot location, mean/min/max income/idle (optional)>
-            driver_max and order_max (for recovering full driver distribution)
+        Returns observation (state) of size (4*world_size or 5*world_size) + n_intervals
+        :return: observation, driver_max, order_max (for recovering full driver distribution)
+            Observation:
+            <driver distr, order distr, idle_drivers, one-hot time, 
+                one-hot location, min income (or idle times) (optional)>
         '''
         next_state = self.get_driver_and_order_distr()
-        # context = self.compute_remaining_drivers_and_orders(next_state)
 
         time_one_hot = np.zeros((self.n_intervals))
         time_one_hot[self.time % self.n_intervals] = 1 # the very last moment (when its "done") is the first time interval of the next epoch
@@ -547,51 +547,52 @@ class TaxiEnv(gym.Env):
         observation = np.zeros(self.observation_space_shape)
         observation[:self.world_size] = next_state[0, :]
         observation[self.world_size:2*self.world_size] = next_state[1, :]
-        #observation[2*self.world_size:3*self.world_size] = context[0,:]
-        #observation[3*self.world_size:4*self.world_size] = context[1,:]
-        observation[2*self.world_size:2*self.world_size+self.n_intervals] = time_one_hot
-        observation[2*self.world_size+self.n_intervals:3*self.world_size+self.n_intervals] = onehot_grid_id
+
+        idle_drivers_per_node = next_state[0, :] - next_state[1, :]
+        idle_drivers_per_node[idle_drivers_per_node < 0] = 0
+        assert (idle_drivers_per_node >= 0).all()
+        if np.sum(idle_drivers_per_node) > 0:
+            idle_drivers_per_node /= np.max(idle_drivers_per_node)
+        assert np.max(idle_drivers_per_node) == 1 or np.max(idle_drivers_per_node) == 0
+        observation[2*self.world_size:3*self.world_size] = idle_drivers_per_node
+
+        observation[3*self.world_size:3*self.world_size+self.n_intervals] = time_one_hot
+        observation[3*self.world_size+self.n_intervals:4*self.world_size+self.n_intervals] = onehot_grid_id
+
         if self.include_income_to_observation:
-            observation[-3:] = self.get_income_per_node(self.current_node_id)
+            observation[4*self.world_size+self.n_intervals:] = self.get_income_per_node(idle_drivers_per_node)
 
         driver_max = np.max(observation[:self.world_size])
-        order_max =  np.max(observation[self.world_size:2*self.world_size])
-        if driver_max == 0:
-            driver_max = 1
-        if order_max == 0:
-            order_max = 1
-        observation[:self.world_size] /= driver_max
-        observation[self.world_size:2*self.world_size] /= order_max
+        order_max = np.max(observation[self.world_size:2*self.world_size])
+        observation[:self.world_size] /= max(driver_max, 1)
+        observation[self.world_size:2*self.world_size] /= max(order_max, 1)
         
         assert (observation >= 0).all() and (observation <= 1).all()
         return observation, driver_max, order_max
 
-    def get_income_per_node(self, node_id):
-        income = np.zeros(3)
-        if self.idle_reward == False:
-            driver_incomes = [d.get_income()/(self.time+1) for d in self.world.nodes[node_id]['info'].drivers]
-            # normalization by time+1 because, e.g., during first steps time is not increased, but drivers earn already
-            min_income = -self.wc
-            max_income = self.max_reward
-            d = max_income - min_income
+    def get_income_per_node(self, idle_drivers_per_node):
+        """
+        :returns: a normalized vector of incomes of idle drivers in the whole world
+        """
+        income = np.zeros(self.world_size)
+        for n in self.world.nodes(data=True):
+            if self.idle_reward == False:
+                driver_incomes = [d.get_income() for d in n[1]['info'].drivers]
+            else:
+                driver_incomes = [d.get_not_idle_periods() for d in n[1]['info'].drivers]
 
-            if self.world.nodes[node_id]['info'].get_driver_num() == 0:
-                driver_incomes = [0]
+            if self.poorest_first:
+                driver_incomes = sorted(driver_incomes)[-idle_drivers_per_node[n[0]]:]
+                
+            income[n[0]] = 0 if len(driver_incomes) == 0 else np.min(driver_incomes)
 
-            income[-3] = (np.mean(driver_incomes) - min_income)/d
-            income[-2] = (np.min(driver_incomes) - min_income)/d
-            income[-1] = (np.max(driver_incomes) - min_income)/d
-        else:
-            driver_idle = [d.get_not_idle_periods()/(self.time+1) for d in self.world.nodes[node_id]['info'].drivers]
+        # normalization. Note that income might be negative
+        income -= np.min(income)
+        if np.sum(income) > 0:
+            income /= np.max(income)
 
-            if self.world.nodes[node_id]['info'].get_driver_num() == 0:
-                driver_incomes = [0]
-
-            income[-3] = (np.mean(driver_idle))
-            income[-2] = (np.min(driver_idle))
-            income[-1] = (np.max(driver_idle))
-        assert np.min(income[-3:]) >= 0, income[-3:]
-        assert np.max(income[-3:]) <= 1, income[-3:]
+        assert np.min(income) == 0
+        assert np.max(income) == 1 or np.sum(income) == 0
         return income
 
     def seed(self, seed = None):

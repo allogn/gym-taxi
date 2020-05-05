@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 from gym_taxi.envs.taxi_env import TaxiEnv
 
 class TaxiEnvBatch(TaxiEnv):
+    """
+    This class merges steps per all cells as a single step.
+    """
     metadata = {'render.modes': ['rgb_array']}
 
     def __init__(self,
@@ -40,13 +43,11 @@ class TaxiEnvBatch(TaxiEnv):
         self.global_action_space_shape = (self.action_space_shape[0]*self.world_size,)
         self.global_action_space = spaces.Box(low=0, high=1, shape=self.global_action_space_shape)
 
-        if include_income_to_observation:
-            # new space = old space - incomes - current_cell_onehot + 3*incomes (of a size of the world)
-            self.global_observation_space_shape = (self.observation_space_shape[0] + 2*len(self.world) - 3,)
-        else:
-            # new space = old space - current_cell_onehot
-            self.global_observation_space_shape = (self.observation_space_shape[0] - len(self.world),)
-        self.observation_space = spaces.Box(low=0, high=1, shape=self.global_observation_space_shape)
+        # current node_id is dropped from observation
+        self.global_observation_space_shape = (self.observation_space_shape[0] - len(self.world),)
+        assert self.global_observation_space_shape[0] == 3*self.world_size + self.n_intervals or \
+                    self.global_observation_space_shape[0] == 4*self.world_size + self.n_intervals
+        self.global_observation_space = spaces.Box(low=0, high=1, shape=self.global_observation_space_shape)
 
     def reset(self) -> Array[int]:
         obs = super(TaxiEnvBatch, self).reset()
@@ -55,17 +56,9 @@ class TaxiEnvBatch(TaxiEnv):
     def get_global_observation(self):
         observation, _, _ = self.get_observation()
         global_observation = np.zeros(self.global_observation_space_shape)
-        # observation: <driver distr, order distr, one-hot time, 
-        #        one-hot location, mean/min/max income (optional)>
-        # global_observation: <driver distr, order distr, one-hot time, 
-        #        mean/min/max income (optional)>
-        size_without_income = 2*self.world_size+self.n_intervals
-        global_observation[:size_without_income] = observation[:size_without_income]
-        if self.include_income_to_observation:
-            for i in range(self.world_size):
-                offset = 3*i
-                v = self.get_income_per_node(i)
-                global_observation[size_without_income+offset:size_without_income+offset+3] = v
+        # global_obs is obs without cell_id
+        global_observation[:3*self.world_size] = observation[:3*self.world_size]
+        global_observation[3*self.world_size:] = observation[4*self.world_size]
         assert (global_observation >= 0).all() and (global_observation <= 1).all()
         return global_observation
 
@@ -119,7 +112,8 @@ class TaxiEnvBatch(TaxiEnv):
         global_observation = self.get_global_observation()
         print("Driver distribution:", global_observation[:self.world_size])
         print("Order distribution:", global_observation[self.world_size:self.world_size*2])
-        t = 2*self.world_size+self.n_intervals
-        print("One-Hot Time:", global_observation[self.world_size*2:t])
+        print("Idle distribution:", global_observation[2*self.world_size:self.world_size*3])
+        t = 3*self.world_size+self.n_intervals
+        print("One-Hot Time:", global_observation[self.world_size*3:t])
         if self.include_income_to_observation:
             print("Incomes:", global_observation[t:])
