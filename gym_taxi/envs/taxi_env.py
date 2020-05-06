@@ -6,6 +6,7 @@ import numpy as np
 import networkx as nx
 import copy
 import math
+import time
 from collections import Counter
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvasAgg
@@ -39,7 +40,8 @@ class TaxiEnv(gym.Env):
                  poorest_first: bool = False,
                  idle_reward: bool = False, 
                  seed: int = None,
-                 hold_observation: bool = True) -> None: 
+                 hold_observation: bool = True,
+                 debug: bool = True) -> None: 
         '''
         :param world: undirected networkx graph that represents spatial cells for drivers to travel
                         nodes should be enumerated sequntially
@@ -64,6 +66,7 @@ class TaxiEnv(gym.Env):
         :param seed: seed for a random state
         :param hold_observation: at each step return observation as like in the beginning of the time interval (true)
                                     or like after applying changes to the previous node (false)
+        :param debug: extra consistency checks
 
         Change self.DEBUG to False in __init__() to disable consistency checks per iteration.
 
@@ -87,7 +90,7 @@ class TaxiEnv(gym.Env):
         available drivers. That is, if all drivers are dispatched, we still count the step as valid.
         '''
         self.seed(seed)
-        self.DEBUG = True
+        self.DEBUG = debug
         self.number_of_resets = 0
 
         # Setting simulator parameters
@@ -167,13 +170,15 @@ class TaxiEnv(gym.Env):
             self.traveling_pool[i] = []
         self.bootstrap_orders()
         self.bootstrap_drivers()
-        self.update_current_node_id()
+        updated = not self.update_current_node_id()
+        assert updated, "Initial state does not have drivers to manage"
         self.last_timestep_dispatch = {} # container for dispatch actions, used in plotting
         self.this_timestep_dispatch = {} # extra container so that each time we can plot for t-1, and save for this t
 
         self.reset_episode_logs()
         obs, _, _ = self.get_observation()
         self.last_time_step_obs = obs
+        self.time_profile = np.zeros(5)
 
     def reset(self) -> Array[int]:
         self.number_of_resets += 1
@@ -199,7 +204,7 @@ class TaxiEnv(gym.Env):
             raise Exception("Trying to step terminated environment. Call reset first.")
         assert self.time < self.n_intervals
         assert action.shape == self.action_space.shape, (action.shape, self.action_space.shape)
-
+        t1 = time.time()
         info = {}
         info["total_orders"] = np.sum([n[1]['info'].get_order_num() for n in self.world.nodes(data=True)])
         info["nodes_with_orders"] = np.sum([1 for n in self.world.nodes(data=True) if n[1]['info'].get_order_num() > 0])
@@ -214,12 +219,14 @@ class TaxiEnv(gym.Env):
 
         dispatch_actions_with_drivers = self.dispatch_drivers(dispatch_actions)
 
+        t2 = time.time()
         for d in dispatch_actions_with_drivers:
             k = (self.current_node_id, d[0])
             self.this_timestep_dispatch[k] = self.this_timestep_dispatch.get(k,0) + d[1] 
 
         reward = self.calculate_reward(dispatch_actions_with_drivers)
 
+        t3 = time.time()
         time_updated = False
         while self.update_current_node_id() and not self.done: # while there is no drivers to manage at current iteration
             self.time += 1
@@ -236,11 +243,13 @@ class TaxiEnv(gym.Env):
                 break
             self.bootstrap_orders()
 
+        t4 = time.time()
         observation, driver_max, order_max = self.get_observation()
         if time_updated:
             self.last_time_step_obs = observation
 
         non_idle_periods = [float(d.get_not_idle_periods()) for d in self.all_driver_list]
+        t5 = time.time()
         
         info2 = {"served_orders": self.served_orders, 
                 "driver normalization constant": driver_max, 
@@ -261,13 +270,18 @@ class TaxiEnv(gym.Env):
         self.episode_logs["rewards"].append(float(reward))
         self.episode_logs["total_steps"] += 1. # total calls to "step" function
         self.episode_logs["idle_periods"] = non_idle_periods # distribution of non-idle-periods over drivers at the last iteration
+        self.episode_logs["env_runtime"] = np.sum(self.time_profile)
 
         if self.done:
             self.last_episode_logs = copy.deepcopy(self.episode_logs)
+            # print(self.time_profile)
 
         if self.DEBUG:
             # time increased, some drivers must avait for instructions or it is done
             self.check_consistency(time_updated) 
+        t6 = time.time()
+
+        self.time_profile += np.array([t6-t5, t5-t4, t4-t3, t3-t2, t2-t1])
         return self.last_time_step_obs if self.hold_observation else observation, reward, self.done, info
 
     def get_episode_info(self):
@@ -300,9 +314,14 @@ class TaxiEnv(gym.Env):
         Remove remaining orders and add new orders.
         In the future possibly for orders to "wait" longer #IDEA
         '''
+        orders_per_node = {}
+        for r in self.orders_per_time_interval[self.time]:
+            d = orders_per_node.get(r[0],[])
+            d.append(r)
+            orders_per_node[r[0]] = d
         for n in self.world.nodes(data=True):
             n[1]['info'].clear_orders()
-            l = [r for r in self.orders_per_time_interval[self.time] if r[0] == n[0]]
+            l = orders_per_node.get(n[0],[])
             s = int(self.order_sampling_rate * len(l))
             random_orders_ind = self.random.choice(np.arange(len(l)), size=s)
             random_orders = np.array(l)[random_orders_ind]
@@ -674,7 +693,7 @@ class TaxiEnv(gym.Env):
         Return a single image
         A mode where an image is plotted in a popup window is not implemented
         '''
-        fig = plt.figure()
+        fig = plt.figure(figsize=(10,10),dpi=150)
         ax = fig.gca()
         ax.axis('off')
 
@@ -721,9 +740,9 @@ class TaxiEnv(gym.Env):
                 plt.plot([c1[0],c2[0]],[c1[1],c2[1]],color="grey")
             else:
                 plt.arrow(c1[0], c1[1], c2[0]-c1[0], c2[1]-c1[1], color=cmap_e(edge_w), lw=0.7,
-                            length_includes_head=True, head_width=0.04, head_length=0.4) #x,y,dx,dy
+                            length_includes_head=True, head_width=0.07, head_length=0.4) #x,y,dx,dy
 
-        plt.title("t={}".format(self.time))
+        # plt.title("t={}".format(self.time)) -- do not plot any titles, so that to add them in a peper
 
         if mode == "fig":
             return fig
