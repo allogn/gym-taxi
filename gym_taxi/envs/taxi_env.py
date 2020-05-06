@@ -591,7 +591,7 @@ class TaxiEnv(gym.Env):
                 driver_incomes = [d.get_not_idle_periods() for d in n[1]['info'].drivers]
 
             if self.poorest_first:
-                driver_incomes = sorted(driver_incomes)[-idle_drivers_per_node[n[0]]:]
+                driver_incomes = sorted(driver_incomes)[-int(idle_drivers_per_node[n[0]]):]
                 
             income[n[0]] = 0 if len(driver_incomes) == 0 else np.min(driver_incomes)
 
