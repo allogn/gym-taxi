@@ -42,7 +42,7 @@ class TestTaxiEnv:
         drivers[0] = 1
         drivers[2] = 1
         drivers[7] = 2
-        env = TaxiEnv(g, orders, 1, drivers, 3, 0.5)
+        env = TaxiEnv(g, orders, 1, drivers, 3, 0.5, hold_observation=False)
         observation = env.reset()
 
         # observation should be [drivers] + [customers] + [onehot time] + [onehot cell]

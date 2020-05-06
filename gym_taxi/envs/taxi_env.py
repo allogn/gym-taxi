@@ -38,7 +38,8 @@ class TaxiEnv(gym.Env):
                  include_income_to_observation: bool = False,
                  poorest_first: bool = False,
                  idle_reward: bool = False, 
-                 seed: int = None) -> None: 
+                 seed: int = None,
+                 hold_observation: bool = True) -> None: 
         '''
         :param world: undirected networkx graph that represents spatial cells for drivers to travel
                         nodes should be enumerated sequntially
@@ -61,6 +62,8 @@ class TaxiEnv(gym.Env):
         :param poorest_first: assignment strategy such that poorest drivers get assigned first
         :param idle_reward: reward by the time a driver is idle rather than by income
         :param seed: seed for a random state
+        :param hold_observation: at each step return observation as like in the beginning of the time interval (true)
+                                    or like after applying changes to the previous node (false)
 
         Change self.DEBUG to False in __init__() to disable consistency checks per iteration.
 
@@ -115,6 +118,7 @@ class TaxiEnv(gym.Env):
         self.count_neighbors = count_neighbors
         self.normalize_rewards = normalize_rewards
         self.include_income_to_observation = include_income_to_observation
+        self.hold_observation = hold_observation
 
         self.drivers_per_node = np.array(drivers_per_node)
         assert self.drivers_per_node.dtype == int
@@ -168,11 +172,14 @@ class TaxiEnv(gym.Env):
         self.this_timestep_dispatch = {} # extra container so that each time we can plot for t-1, and save for this t
 
         self.reset_episode_logs()
+        obs, _, _ = self.get_observation()
+        self.last_time_step_obs = obs
 
     def reset(self) -> Array[int]:
         self.number_of_resets += 1
         self.init()
         obs, _, _ = self.get_observation()
+        self.last_time_step_obs = obs
         return obs
 
     def get_number_of_resets(self):
@@ -228,9 +235,11 @@ class TaxiEnv(gym.Env):
             if self.done:
                 break
             self.bootstrap_orders()
-        
 
         observation, driver_max, order_max = self.get_observation()
+        if time_updated:
+            self.last_time_step_obs = observation
+
         non_idle_periods = [float(d.get_not_idle_periods()) for d in self.all_driver_list]
         
         info2 = {"served_orders": self.served_orders, 
@@ -259,7 +268,7 @@ class TaxiEnv(gym.Env):
         if self.DEBUG:
             # time increased, some drivers must avait for instructions or it is done
             self.check_consistency(time_updated) 
-        return observation, reward, self.done, info
+        return self.last_time_step_obs if self.hold_observation else observation, reward, self.done, info
 
     def get_episode_info(self):
         return self.last_episode_logs

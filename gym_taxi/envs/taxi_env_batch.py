@@ -37,7 +37,7 @@ class TaxiEnvBatch(TaxiEnv):
         super(TaxiEnvBatch, self).__init__(world, orders, order_sampling_rate, drivers_per_node,
                                 n_intervals, wc, count_neighbors,
                                 weight_poorest, normalize_rewards, minimum_reward, reward_bound,
-                                include_income_to_observation, poorest_first, idle_reward, seed)
+                                include_income_to_observation, poorest_first, idle_reward, seed, True)
         # update action and observation spaces: now covering all network
         # do not override single-cell variables, as they are used to make steps in the parent class
         self.global_action_space_shape = (self.action_space_shape[0]*self.world_size,)
