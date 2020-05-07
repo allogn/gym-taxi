@@ -55,11 +55,17 @@ class TaxiEnvBatch(TaxiEnv):
         return self.get_global_observation()
 
     def get_global_observation(self):
+        """
+        Returns observation from env without node_id.
+        Observation:
+            <driver distr, order distr, idle_drivers, one-hot time, min income (or idle times) (optional)>
+            which is of (3/4)*world_size + n_intervals
+        """
         observation, _, _ = self.get_observation()
         global_observation = np.zeros(self.global_observation_space_shape)
         # global_obs is obs without cell_id
         global_observation[:3*self.world_size] = observation[:3*self.world_size]
-        global_observation[3*self.world_size:] = observation[4*self.world_size]
+        global_observation[3*self.world_size:] = observation[4*self.world_size:]
         assert (global_observation >= 0).all() and (global_observation <= 1).all()
         return global_observation
 
