@@ -270,7 +270,7 @@ class TaxiEnv(gym.Env):
         self.episode_logs["rewards"].append(float(reward))
         self.episode_logs["total_steps"] += 1. # total calls to "step" function
         self.episode_logs["idle_periods"] = non_idle_periods # distribution of non-idle-periods over drivers at the last iteration
-        self.episode_logs["env_runtime"] = np.sum(self.time_profile)
+        self.episode_logs["env_runtime"] = float(np.sum(self.time_profile))
 
         if self.done:
             self.last_episode_logs = copy.deepcopy(self.episode_logs)
