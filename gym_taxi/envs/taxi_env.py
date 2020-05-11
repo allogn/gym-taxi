@@ -815,6 +815,7 @@ class TaxiEnv(gym.Env):
         :param nodes: a subset of nodes to preserve in the world.
         """
         self.full_to_view_ind = {}
+        nodes = list(nodes)
         self.view_to_full_ind = list(nodes)
         for i in range(len(nodes)):
             self.full_to_view_ind[nodes[i]] = i
