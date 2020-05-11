@@ -22,7 +22,6 @@ class TestTaxiEnv:
         assert len(env.all_driver_list) == env.n_drivers
         assert env.max_reward == 0.7
         assert len(env.orders_per_time_interval) == n_intervals+1
-        assert env.max_degree == 3
         assert env.action_space_shape == (4,)
         assert env.done == False
         assert env.time == 0
@@ -257,3 +256,39 @@ class TestTaxiEnv:
             assert rew == rew2
             assert done == done2
             assert info == info2
+
+    def test_view(self):
+        g = nx.Graph()
+        g.add_edges_from([(0,1),(1,2),(2,3),(3,4),(1,5)])
+        nx.set_node_attributes(g, {0: (0,1), 1: (0,2), 2: (0,3), 3: (0,4), 4: (0,5), 5: (1,1)}, name="coords")
+        orders = [(3,2,2,3,3)]
+        drivers = np.array([1,1,1,1,1,1])
+        action = np.array([1, 0, 0], dtype=float)
+
+        env = TaxiEnv(g, orders, 1, drivers, 10)
+        env.set_view([2,3,4])
+        obs, _, _ = env.get_observation()
+
+        # check observation space and content
+        assert env.observation_space_shape == obs.shape
+        view_size = 3
+        assert env.observation_space_shape == (view_size*4 + 10,) # default income is not included, so its <driver, order, idle, time_id, node_id>
+        assert env.action_space_shape == (3,) # degree of 1 is 3, but of the rest is 2. So it should be 2 + 1 (staying action)
+        assert env.current_node_id in [2,3,4]
+
+        env.step(action)
+        assert env.current_node_id in [2,3,4]
+        env.step(action)
+        assert env.current_node_id in [2,3,4]
+        obs, rew, done, info = env.step(action)
+        assert (obs[:view_size] == np.array([1,1,0])).all()
+        assert (obs[view_size:2*view_size] == np.array([0,0,0])).all()
+        assert (obs[2*view_size:3*view_size] == np.array([1,1,0])).all()
+        # next time iteration should happen
+        assert env.time == 1
+        assert env.current_node_id in [2,3]
+        assert (obs[2*view_size:3*view_size] == np.array([1,1,0])).all()
+        assert (obs[3*view_size:3*view_size+10] == np.array([0,1,0,0,0,0,0,0,0,0])).all()
+        assert obs[3*view_size+10:].shape == (3,)
+        assert (obs[3*view_size+10:] == np.array([1,0,0])).all() or  (obs[3*view_size+10:] == np.array([0,1,0])).all()
+        assert [d.position for d in env.all_driver_list] == [0, 1, 1, 2, 3, 5]

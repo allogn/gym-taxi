@@ -24,7 +24,7 @@ class TaxiEnvBatch(TaxiEnv):
                  order_sampling_rate: float,
                  drivers_per_node: Array[int],
                  n_intervals: List,
-                 wc: float,
+                 wc: float = 0,
                  count_neighbors: bool = False,
                  weight_poorest: bool = False,
                  normalize_rewards: bool = True,
@@ -39,15 +39,19 @@ class TaxiEnvBatch(TaxiEnv):
                                 n_intervals, wc, count_neighbors,
                                 weight_poorest, normalize_rewards, minimum_reward, reward_bound,
                                 include_income_to_observation, poorest_first, idle_reward, seed, True, debug)
-        # update action and observation spaces: now covering all network
-        # do not override single-cell variables, as they are used to make steps in the parent class
-        self.global_action_space_shape = (self.action_space_shape[0]*self.world_size,)
+
+    def set_action_and_observation_space(self, max_degree, world_size, n_intervals):
+        super(TaxiEnvBatch, self).set_action_and_observation_space(max_degree, world_size, n_intervals)
+
+        # do not override single-cell variables (e.g. action_space_shape), 
+        # as they are used to make steps in the parent class
+        self.global_action_space_shape = (self.action_space_shape[0]*world_size,)
         self.global_action_space = spaces.Box(low=0, high=1, shape=self.global_action_space_shape)
 
         # current node_id is dropped from observation
-        self.global_observation_space_shape = (self.observation_space_shape[0] - len(self.world),)
-        assert self.global_observation_space_shape[0] == 3*self.world_size + self.n_intervals or \
-                    self.global_observation_space_shape[0] == 4*self.world_size + self.n_intervals
+        self.global_observation_space_shape = (self.observation_space_shape[0] - world_size,)
+        assert self.global_observation_space_shape[0] == 3*world_size + n_intervals or \
+                    self.global_observation_space_shape[0] == 4*world_size + n_intervals
         self.global_observation_space = spaces.Box(low=0, high=1, shape=self.global_observation_space_shape)
 
     def reset(self) -> Array[int]:
@@ -64,8 +68,9 @@ class TaxiEnvBatch(TaxiEnv):
         observation, _, _ = self.get_observation()
         global_observation = np.zeros(self.global_observation_space_shape)
         # global_obs is obs without cell_id
-        global_observation[:3*self.world_size] = observation[:3*self.world_size]
-        global_observation[3*self.world_size:] = observation[4*self.world_size:]
+        world_size = len(self.full_to_view_ind)
+        global_observation[:3*world_size+self.n_intervals] = observation[:3*world_size+self.n_intervals]
+        global_observation[3*world_size+self.n_intervals:] = observation[4*world_size+self.n_intervals:]
         assert (global_observation >= 0).all() and (global_observation <= 1).all()
         return global_observation
 
@@ -73,21 +78,23 @@ class TaxiEnvBatch(TaxiEnv):
         if self.done:
             raise Exception("Trying to step terminated environment. Call reset first.")
         global_reward = 0
-        reward_per_node = np.zeros(self.world_size)
+        world_size = len(self.full_to_view_ind)
+        reward_per_node = np.zeros(world_size)
         init_t = self.time
 
         total_served_orders = 0
         max_driver = None
         max_order = None
-        cells_with_nonzero_drivers = np.sum([1 for n in self.world.nodes(data=True) if n[1]['info'].get_driver_num() > 0])
+        cells_with_nonzero_drivers = np.sum([1 for n, _ in self.full_to_view_ind.items() \
+                                                if self.world.nodes[n]['info'].get_driver_num() > 0])
         last_info = {} # info of the last step should be the correct one
         for i in range(cells_with_nonzero_drivers):
-            a = self.current_node_id*self.action_space_shape[0]
+            a = self.full_to_view_ind[self.current_node_id]*self.action_space_shape[0]
             action_per_cell = action[a:a+self.action_space_shape[0]]
             _, reward, done, info = super(TaxiEnvBatch, self).step(action_per_cell)
             last_info = info
 
-            reward_per_node[self.current_node_id] = reward
+            reward_per_node[self.full_to_view_ind[self.current_node_id]] = reward
             global_reward += reward
             total_served_orders += info['served_orders']
 
@@ -117,10 +124,11 @@ class TaxiEnvBatch(TaxiEnv):
 
     def print_observation(self):
         global_observation = self.get_global_observation()
-        print("Driver distribution:", global_observation[:self.world_size])
-        print("Order distribution:", global_observation[self.world_size:self.world_size*2])
-        print("Idle distribution:", global_observation[2*self.world_size:self.world_size*3])
-        t = 3*self.world_size+self.n_intervals
-        print("One-Hot Time:", global_observation[self.world_size*3:t])
+        world_size = len(self.full_to_view_ind)
+        print("Driver distribution:", global_observation[:world_size])
+        print("Order distribution:", global_observation[world_size:world_size*2])
+        print("Idle distribution:", global_observation[2*world_size:world_size*3])
+        t = 3*world_size+self.n_intervals
+        print("One-Hot Time:", global_observation[world_size*3:t])
         if self.include_income_to_observation:
             print("Incomes:", global_observation[t:])

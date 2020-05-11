@@ -40,3 +40,34 @@ class TestTaxiEnvBatch:
         observation, reward, done, info = env.step(action)
         assert done == True
 
+    
+    def test_view(self):
+        g = nx.Graph()
+        g.add_edges_from([(0,1),(1,2),(2,3),(3,4),(1,5)])
+        nx.set_node_attributes(g, {0: (0,1), 1: (0,2), 2: (0,3), 3: (0,4), 4: (0,5), 5: (1,1)}, name="coords")
+        orders = [(3,2,2,3,3)]
+        drivers = np.array([1,1,1,1,1,1])
+        action = np.array([1, 0, 0, 1, 0, 0, 1, 0, 0], dtype=float)
+
+        env = TaxiEnvBatch(g, orders, 1, drivers, 10)
+        env.set_view([2,3,4])
+        obs = env.get_global_observation()
+
+        # check observation space and content
+        assert env.global_observation_space_shape == obs.shape
+        view_size = 3
+        assert env.global_observation_space_shape == (view_size*3 + 10,) # default income is not included, so its <driver, order, idle, time_id>
+        # degree of 1 is 3, but of the rest is 2. So it should be 2 + 1 (staying action), multiplies by number of nodes
+        assert env.global_action_space_shape == (9,) 
+        assert env.current_node_id in [2,3,4]
+
+        obs, rew, done, info = env.step(action)
+        assert env.current_node_id in [2,3]
+        assert (obs[:view_size] == np.array([1,1,0])).all()
+        assert (obs[view_size:2*view_size] == np.array([0,0,0])).all()
+        assert (obs[2*view_size:3*view_size] == np.array([1,1,0])).all()
+        # next time iteration should happen
+        assert env.time == 1
+        assert (obs[2*view_size:3*view_size] == np.array([1,1,0])).all()
+        assert (obs[3*view_size:] == np.array([0,1,0,0,0,0,0,0,0,0])).all()
+        assert [d.position for d in env.all_driver_list] == [0, 1, 1, 2, 3, 5]
