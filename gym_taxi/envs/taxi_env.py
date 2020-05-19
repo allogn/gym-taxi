@@ -162,7 +162,8 @@ class TaxiEnv(gym.Env):
             'nodes_with_drivers': [],
             'nodes_with_orders': [],
             'rewards': [],
-            "total_steps": 0.
+            "total_steps": 0., # must be float for type check in callbacks
+            'last_time_step': 0.
         }
 
     def init(self):
@@ -210,6 +211,9 @@ class TaxiEnv(gym.Env):
             raise Exception("Trying to step terminated environment. Call reset first.")
         assert self.time < self.n_intervals
         assert action.shape == self.action_space.shape, (action.shape, self.action_space.shape)
+        if self.episode_logs['last_time_step'] == 0:
+            assert self.time == 0
+
         t1 = time.time()
         info = {
             "total_orders": 0,
@@ -282,12 +286,14 @@ class TaxiEnv(gym.Env):
         self.episode_logs["driver_income_bounded"] = [float(d.get_income()) for d in self.all_driver_list]
         self.episode_logs["rewards"].append(float(reward))
         self.episode_logs["total_steps"] += 1. # total calls to "step" function
+        assert self.episode_logs["total_steps"] <= self.world_size * self.n_intervals
         self.episode_logs["idle_periods"] = non_idle_periods # distribution of non-idle-periods over drivers at the last iteration
         self.episode_logs["env_runtime"] = float(np.sum(self.time_profile))
+        self.episode_logs["last_time_step"] = float(self.time)
 
         if self.done:
             self.last_episode_logs = copy.deepcopy(self.episode_logs)
-            # print(self.time_profile)
+            self.reset_episode_logs()
 
         if self.DEBUG:
             # time increased, some drivers must avait for instructions or it is done
@@ -298,6 +304,8 @@ class TaxiEnv(gym.Env):
         return self.last_time_step_obs if self.hold_observation else observation, reward, self.done, info
 
     def get_episode_info(self):
+        if self.last_episode_logs is None:
+            logging.error(self.episode_logs)
         return self.last_episode_logs
 
     def set_orders_per_time_interval(self, orders: Tuple[int, int, int, int, float]) -> None:
