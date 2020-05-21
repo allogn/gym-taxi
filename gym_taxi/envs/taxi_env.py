@@ -313,10 +313,19 @@ class TaxiEnv(gym.Env):
         max_reward = 0
         for i in range(self.n_intervals+1): # last element is not filled and used to store final results
             self.orders_per_time_interval[i] = []
+
+        non_paying_customers = 0
         for order in orders:
-            max_reward = max(max_reward, order[4])
-            t = order[2] % self.n_intervals
-            self.orders_per_time_interval[t].append(tuple(order))
+            # all order prices are assumed to be positive (when calculating statistics on dispatching)
+            assert order[4] >= 0, order
+            if order[4] == 0:
+                non_paying_customers += 1
+            else:
+                max_reward = max(max_reward, order[4])
+                t = order[2] % self.n_intervals
+                self.orders_per_time_interval[t].append(tuple(order))
+        if non_paying_customers > 0:
+            logging.warning("{} (out of {}) customers do not pay.".format(non_paying_customers, len(orders)))
         self.max_reward = max_reward
 
     def driver_status_control(self) -> None:
