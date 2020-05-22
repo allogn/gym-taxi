@@ -56,6 +56,7 @@ class TestTaxiEnv:
         assert node_id in [0, 2, 7]
 
         env.current_node_id = 0
+        env.find_non_empty_nodes()
         action = np.zeros(5)
         action[0] = 1
         observation, reward, done, info = env.step(action)
@@ -68,6 +69,7 @@ class TestTaxiEnv:
         assert (observation[:N] == new_drivers/np.max(new_drivers)).all()
 
         env.current_node_id = 2
+        env.find_non_empty_nodes()
         action = np.zeros(5)
         action[-1] = 1
         observation, reward, done, info = env.step(action)
@@ -75,6 +77,7 @@ class TestTaxiEnv:
         assert reward == -0.5
 
         assert env.current_node_id == 7
+        env.find_non_empty_nodes()
         assert env.time == 0
         assert (observation[N:2*N] == order_distr).all()
         new_drivers[2] = 0
@@ -138,11 +141,13 @@ class TestTaxiEnv:
         env = TaxiEnv(g, orders, 1, drivers, 3, 0.5, count_neighbors = True)
         observation1 = env.reset()
         env.current_node_id = 0
+        env.non_empty_nodes = [1,2]
         dispatch_list = env.make_order_dispatch_list_and_remove_orders()
         assert len(dispatch_list) == 2
 
         env.reset() # order_dispatch_list can be run only single time
         env.current_node_id = 0
+        env.non_empty_nodes = [1,2]
         observation2, reward, done, info = env.step(np.zeros(3))
         assert reward == (1 + 2 - 0.5 - 0.5) / 4
 
@@ -165,12 +170,14 @@ class TestTaxiEnv:
         env = TaxiEnv(g, orders, 1, drivers, 3, 0.5, count_neighbors = True, normalize_rewards = False)
         observation = env.reset()
         env.current_node_id = 3
+        env.non_empty_nodes = [0,1,2]
         observation, reward, done, info = env.step(action)
         assert reward == (3 + 3 - 0.5 - 0.5 - 0.5)
 
         env = TaxiEnv(g, orders, 1, drivers, 3, 0.5, count_neighbors = True, weight_poorest=True)
         observation = env.reset()
         env.current_node_id = 3
+        env.non_empty_nodes = [0,1,2]
         observation, reward, done, info = env.step(action)
         # reward is softmax of the reard multiplied by reward
         r = np.array([0, 3, 3, -0.5, -.5, -.5]) # 0 is because there is a guy in the node 0 that does not move
@@ -182,18 +189,21 @@ class TestTaxiEnv:
         env = TaxiEnv(g, orders, 1, drivers, 3, 0.5, count_neighbors = True, minimum_reward = True)
         observation = env.reset()
         env.current_node_id = 3
+        env.non_empty_nodes = [0,1,2]
         observation, reward, done, info = env.step(action)
         assert reward == -0.5 / 5 # returns a single value of a minimum reward, normalized
 
         env = TaxiEnv(g, orders, 1, drivers, 3, 0.5, count_neighbors = True, normalize_rewards = False, minimum_reward = True)
         observation = env.reset()
         env.current_node_id = 3
+        env.non_empty_nodes = [0,1,2]
         observation, reward, done, info = env.step(action)
         assert reward == -0.5 # returns a single value of a minimum reward, non-normalized
 
         env = TaxiEnv(g, orders, 1, drivers, 3, 0.5, count_neighbors = True, reward_bound = 1)
         observation = env.reset()
         env.current_node_id = 3
+        env.non_empty_nodes = [0,1,2]
         observation, reward, done, info = env.step(action)
         assert reward == (1 + 1 - 0.5 - 0.5 - 0.5) / 5
 
@@ -202,6 +212,7 @@ class TestTaxiEnv:
         observation = env.reset()
         env.world.nodes[0]['info'].drivers[0].add_income(0.9)
         env.current_node_id = 3
+        env.non_empty_nodes = [0,1,2]
         # all drivers from 3rd node are moved but haven't arrived, so observation should show only the driver at 0's node
         observation, reward, done, info = env.step(action)
         assert env.current_node_id == 0

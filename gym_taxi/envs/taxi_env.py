@@ -134,10 +134,9 @@ class TaxiEnv(gym.Env):
         max_degree = np.max([d[1] for d in nx.degree(self.world)])
         self.set_action_and_observation_space(max_degree, self.world_size, self.n_intervals)
 
-        self.set_view([n for n in self.world.nodes()]) # set default view to all nodes
+        self.set_view([n for n in self.world.nodes()]) # set default view to all nodes, call init inside
         self.reset_episode_logs()
         self.last_episode_logs = None
-        self.init()
     
     def set_action_and_observation_space(self, max_degree, world_size, n_intervals):
         # set action space
@@ -177,6 +176,7 @@ class TaxiEnv(gym.Env):
             self.traveling_pool[i] = []
         self.bootstrap_orders()
         self.bootstrap_drivers()
+        self.find_non_empty_nodes()
         updated = not self.update_current_node_id()
         assert updated, "Initial state does not have drivers to manage"
         self.last_timestep_dispatch = {} # container for dispatch actions, used in plotting
@@ -205,6 +205,13 @@ class TaxiEnv(gym.Env):
 
     def step(self, action: Array[float]) -> Tuple[Array[int], float, bool, Dict]:
         """
+        Applies the action, and returns observation.
+        If self.hold_observation parameter is true (default), then
+        the observation is always returned as it is in the beginning of the time step.
+
+        Otherwise, observation is updated at each step (after each node update). 
+        In this case, a significant time overhead for updating the observation is expected.
+
         :returns: observation, reward, done, info
         """
         if self.done:
@@ -264,6 +271,7 @@ class TaxiEnv(gym.Env):
             if self.done:
                 break
             self.bootstrap_orders()
+            self.find_non_empty_nodes()
             order_time += time.time() - t
 
         t4 = time.time()
@@ -323,7 +331,7 @@ class TaxiEnv(gym.Env):
         non_paying_customers = 0
         
         s = int(self.order_sampling_rate * len(orders))
-        sampled_orders_index = np.random.choice(len(orders), size=s, replace=False)
+        sampled_orders_index = self.random.choice(len(orders), size=s, replace=False)
         sampled_orders = list(np.array(orders)[sampled_orders_index,:])
         for order in sampled_orders:
             # all order prices are assumed to be positive (when calculating statistics on dispatching)
@@ -580,11 +588,18 @@ class TaxiEnv(gym.Env):
 
         return true if we need to increase time
         '''
-        non_empty_nodes = [n for n, _ in self.full_to_view_ind.items() if self.world.nodes[n]['info'].get_driver_num() > 0]
-        if len(non_empty_nodes) == 0:
-            return True
-        self.current_node_id = self.random.choice(non_empty_nodes)
-        return False
+        while len(self.non_empty_nodes) > 0:
+            self.current_node_id = self.non_empty_nodes.pop()
+            # can be false positive due to neighbourhood matches
+            if self.world.nodes[self.current_node_id]['info'].get_driver_num() > 0:
+                # accept the choice and return a signal that there are non-served nodes
+                return False
+        # return that it is time to update the time step
+        return True
+
+    def find_non_empty_nodes(self) -> None:
+        self.non_empty_nodes = [n for n, _ in self.full_to_view_ind.items() if self.world.nodes[n]['info'].get_driver_num() > 0]
+        self.random.shuffle(self.non_empty_nodes)
 
     def get_driver_and_order_distr(self) -> Array[int]:
         next_state = np.zeros((2, len(self.full_to_view_ind)))
@@ -822,6 +837,7 @@ class TaxiEnv(gym.Env):
 
         self.time = another_env.time
         self.episode_logs = copy.deepcopy(another_env.episode_logs)
+        self.non_empty_nodes = another_env.non_empty_nodes
         self.current_node_id = another_env.current_node_id
         self.done = another_env.done
         self.last_episode_logs = another_env.last_episode_logs
