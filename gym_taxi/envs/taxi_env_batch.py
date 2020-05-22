@@ -58,6 +58,13 @@ class TaxiEnvBatch(TaxiEnv):
         obs = super(TaxiEnvBatch, self).reset()
         return self.get_global_observation()
 
+    def get_reset_info(self) -> Dict:
+        obs, driver_max, order_max = self.get_observation()
+        return {"served_orders": 0,
+                "driver normalization constant": self.episode_logs["driver normalization constant"], # required for cA2C
+                "order normalization constant": self.episode_logs["order normalization constant"]
+                }
+
     def get_global_observation(self):
         """
         Returns observation from env without node_id.
@@ -98,9 +105,6 @@ class TaxiEnvBatch(TaxiEnv):
             global_reward += reward
             total_served_orders += info['served_orders']
 
-            # updated at each step, but the final should be corrent
-            max_driver = info["driver normalization constant"]
-            max_order = info["order normalization constant"]
             assert done == self.done
             assert i == cells_with_nonzero_drivers-1 or self.done == False
 
@@ -110,8 +114,8 @@ class TaxiEnvBatch(TaxiEnv):
 
         global_info = {"reward_per_node": reward_per_node,
                         "served_orders": total_served_orders,
-                        "driver normalization constant": max_driver,
-                        "order normalization constant": max_order
+                        "driver normalization constant": self.episode_logs["driver normalization constant"], # required for cA2C
+                        "order normalization constant": self.episode_logs["order normalization constant"] # required for cA2C
                         }
         global_info.update(last_info)
         return global_observation, global_reward, self.done, global_info

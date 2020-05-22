@@ -134,8 +134,8 @@ class TaxiEnv(gym.Env):
         max_degree = np.max([d[1] for d in nx.degree(self.world)])
         self.set_action_and_observation_space(max_degree, self.world_size, self.n_intervals)
 
+        self.episode_logs = {}
         self.set_view([n for n in self.world.nodes()]) # set default view to all nodes, call init inside
-        self.reset_episode_logs()
         self.last_episode_logs = None
     
     def set_action_and_observation_space(self, max_degree, world_size, n_intervals):
@@ -154,7 +154,9 @@ class TaxiEnv(gym.Env):
 
 
     def reset_episode_logs(self):
-        self.episode_logs = {
+        # updating values that accumulate over steps. other values stay as they are, 
+        # so that max_driver and max_order are saved from previous observation update
+        self.episode_logs.update({
             'order_response_rates': [],
             'number_of_idle_drivers': [],
             'number_of_served_orders': [],
@@ -163,7 +165,7 @@ class TaxiEnv(gym.Env):
             'rewards': [],
             "total_steps": 0., # must be float for type check in callbacks
             'last_time_step': 0.
-        }
+        })
 
     def init(self):
         # this function is separated from reset() because taxi_env_batch overrides reset
@@ -183,25 +185,21 @@ class TaxiEnv(gym.Env):
         self.this_timestep_dispatch = {} # extra container so that each time we can plot for t-1, and save for this t
 
         self.reset_episode_logs()
-        obs, _, _ = self.get_observation()
-        self.last_time_step_obs = obs
         self.time_profile = np.zeros(5)
+        obs, max_driver, max_order = self.get_observation()
+        self.update_episode_logs_once_per_obs_update(max_driver, max_order)
+        self.last_time_step_obs = obs
 
     def reset(self) -> Array[int]:
         self.number_of_resets += 1
         self.init()
-        obs, _, _ = self.get_observation()
+        obs, max_driver, max_order = self.get_observation()
+        self.update_episode_logs_once_per_obs_update(max_driver, max_order)
         self.last_time_step_obs = obs
         return obs
 
     def get_number_of_resets(self) -> int:
         return self.number_of_resets
-
-    def get_reset_info(self) -> Dict:
-        obs, driver_max, order_max = self.get_observation()
-        return {"served_orders": 0, 
-                "driver normalization constant": driver_max, 
-                "order normalization constant": order_max}
 
     def step(self, action: Array[float]) -> Tuple[Array[int], float, bool, Dict]:
         """
@@ -275,39 +273,21 @@ class TaxiEnv(gym.Env):
             order_time += time.time() - t
 
         t4 = time.time()
-        observation, driver_max, order_max = self.get_observation()
+        info2 = {"served_orders": self.served_orders}
+        info.update(info2)
+        self.update_episode_logs_each_step(reward, dispatch_actions, info)
+        observation = None
+        if (self.hold_observation and time_updated) or (not self.hold_observation):
+            observation, driver_max, order_max = self.get_observation()
+            self.update_episode_logs_once_per_obs_update(driver_max, order_max)
+
         if time_updated:
             self.last_time_step_obs = observation
-
-        non_idle_periods = [float(d.get_not_idle_periods()) for d in self.all_driver_list]
-        t5 = time.time()
-        
-        info2 = {"served_orders": self.served_orders, 
-                "driver normalization constant": driver_max, 
-                "order normalization constant": order_max,
-                "idle_reward": float(np.mean(non_idle_periods)),
-                "min_idle": float(np.min(non_idle_periods))}
-        info.update(info2)
-
-        self.episode_logs["number_of_idle_drivers"].append(sum([a[1] for a in dispatch_actions if a[2] <= 0]))
-        assert self.served_orders == sum([a[1] for a in dispatch_actions if a[2] > 0])
-        self.episode_logs["number_of_served_orders"].append(self.served_orders)
-        assert info['total_orders'] >= info['served_orders']
-        self.episode_logs["order_response_rates"].append(float(info['served_orders']/(info['total_orders']+0.0001)))
-        self.episode_logs["nodes_with_drivers"].append(int(info['nodes_with_drivers']))
-        self.episode_logs["nodes_with_orders"].append(int(info['nodes_with_orders']))
-        self.episode_logs["driver_income"] = [float(d.income) for d in self.all_driver_list]
-        self.episode_logs["driver_income_bounded"] = [float(d.get_income()) for d in self.all_driver_list]
-        self.episode_logs["rewards"].append(float(reward))
-        self.episode_logs["total_steps"] += 1. # total calls to "step" function
-        assert self.episode_logs["total_steps"] <= self.world_size * self.n_intervals
-        self.episode_logs["idle_periods"] = non_idle_periods # distribution of non-idle-periods over drivers at the last iteration
-        self.episode_logs["env_runtime"] = float(np.sum(self.time_profile))
-        self.episode_logs["last_time_step"] = float(self.time)
 
         if self.done:
             self.last_episode_logs = copy.deepcopy(self.episode_logs)
             self.reset_episode_logs()
+        t5 = time.time()
 
         if self.DEBUG:
             # time increased, some drivers must avait for instructions or it is done
@@ -316,6 +296,29 @@ class TaxiEnv(gym.Env):
 
         self.time_profile += np.array([t6-t5, t5-t4, t4-t3, t3-t2, t2-t1])
         return self.last_time_step_obs if self.hold_observation else observation, reward, self.done, info
+
+    def update_episode_logs_once_per_obs_update(self, driver_max, order_max):
+        self.episode_logs.update({
+            "idle_periods": [float(d.get_not_idle_periods()) for d in self.all_driver_list],
+            "env_runtime": float(np.sum(self.time_profile)),
+            "last_time_step": float(self.time),
+            "driver_income": [float(d.income) for d in self.all_driver_list],
+            "driver_income_bounded": [float(d.get_income()) for d in self.all_driver_list], 
+            "driver normalization constant": float(driver_max), 
+            "order normalization constant": float(order_max)
+        })
+
+    def update_episode_logs_each_step(self, reward, dispatch_actions, info):
+        self.episode_logs["number_of_idle_drivers"].append(sum([a[1] for a in dispatch_actions if a[2] <= 0]))
+        assert self.served_orders == sum([a[1] for a in dispatch_actions if a[2] > 0])
+        self.episode_logs["number_of_served_orders"].append(self.served_orders)
+        assert info['total_orders'] >= info['served_orders']
+        self.episode_logs["order_response_rates"].append(float(info['served_orders']/(info['total_orders']+0.0001)))
+        self.episode_logs["nodes_with_drivers"].append(int(info['nodes_with_drivers']))
+        self.episode_logs["nodes_with_orders"].append(int(info['nodes_with_orders']))
+        self.episode_logs["rewards"].append(float(reward))
+        self.episode_logs["total_steps"] += 1. # total calls to "step" function
+        assert self.episode_logs["total_steps"] <= self.world_size * self.n_intervals
 
     def get_episode_info(self):
         if self.last_episode_logs is None:
