@@ -245,6 +245,8 @@ class TaxiEnv(gym.Env):
 
         t3 = time.time()
         time_updated = False
+        driver_time = 0
+        order_time = 0
         while self.update_current_node_id() and not self.done: # while there is no drivers to manage at current iteration
             self.time += 1
             self.last_timestep_dispatch = self.this_timestep_dispatch
@@ -255,10 +257,14 @@ class TaxiEnv(gym.Env):
             if self.DEBUG:
                 for d in self.all_driver_list:
                     assert d.status == 0 or d.position not in self.full_to_view_ind, d
+            t = time.time()
             self.driver_status_control()  # drivers that finish an order become available again.
+            driver_time += time.time() - t
+            t = time.time()
             if self.done:
                 break
             self.bootstrap_orders()
+            order_time += time.time() - t
 
         t4 = time.time()
         observation, driver_max, order_max = self.get_observation()
@@ -315,7 +321,11 @@ class TaxiEnv(gym.Env):
             self.orders_per_time_interval[i] = []
 
         non_paying_customers = 0
-        for order in orders:
+        
+        s = int(self.order_sampling_rate * len(orders))
+        sampled_orders_index = np.random.choice(len(orders), size=s, replace=False)
+        sampled_orders = list(np.array(orders)[sampled_orders_index,:])
+        for order in sampled_orders:
             # all order prices are assumed to be positive (when calculating statistics on dispatching)
             assert order[4] >= 0, order
             if order[4] == 0:
@@ -345,19 +355,11 @@ class TaxiEnv(gym.Env):
         Orders wait only one time interval.
         Orders are dispatched only in the view, to save time.
         '''
-        orders_per_node = {}
-        for r in self.orders_per_time_interval[self.time]:
-            d = orders_per_node.get(r[0],[])
-            d.append(r)
-            orders_per_node[r[0]] = d
         for n in self.full_to_view_ind:
-            node = self.world.nodes[n]['info']
-            node.clear_orders()
-            l = orders_per_node.get(n,[])
-            s = int(self.order_sampling_rate * len(l))
-            random_orders_ind = self.random.choice(np.arange(len(l)), size=s)
-            random_orders = np.array(l)[random_orders_ind]
-            node.add_orders(random_orders)
+            self.world.nodes[n]['info'].clear_orders()
+
+        for r in self.orders_per_time_interval[self.time]:
+            self.world.nodes[r[0]]['info'].add_order(r)
 
     def bootstrap_drivers(self) -> None:
         """
@@ -717,11 +719,14 @@ class TaxiEnv(gym.Env):
                     assert d.income_bound == self.reward_bound
 
          # all orders should be bootstraped, except for the last time step
-            expected_orders = 0
         if time_updated and self.time < self.n_intervals:
-            for n in self.world.nodes(data=True):
-                l = [r for r in self.orders_per_time_interval[self.time] if r[0] == n[0]]
-                expected_orders += int(self.order_sampling_rate * len(l))
+            expected_orders = 0.
+            for n in self.full_to_view_ind:
+                l = [r for r in self.orders_per_time_interval[self.time] if r[0] == n]
+                expected_orders += len(l)
+            for n in self.world.nodes():
+                if n not in self.full_to_view_ind:
+                    assert self.world.nodes[n]['info'].get_order_num() == 0
             number_of_orders = sum([n[1]['info'].get_order_num() for n in self.world.nodes(data=True)])
             assert expected_orders == number_of_orders, (expected_orders, number_of_orders)
 
@@ -731,7 +736,8 @@ class TaxiEnv(gym.Env):
         for d in self.all_driver_list:
             if d.status == 1: # driver hasn't moved in this time interval (their node hasn't been processed)
                 # Their income should be consistent to the current time interval
-                assert d.income >= -self.wc*(self.time - d.get_not_idle_periods()), d
+                # float error added (if negative balance accumulates)
+                assert d.income - (-self.wc*(self.time - d.get_not_idle_periods())) >= -0.00001, "Driver's income is not consistent: {}".format(d)
 
     def render(self, mode='rgb_array'):
         '''
