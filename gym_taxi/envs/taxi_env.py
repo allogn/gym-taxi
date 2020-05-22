@@ -718,12 +718,9 @@ class TaxiEnv(gym.Env):
                 if self.reward_bound is not None:
                     assert d.income_bound == self.reward_bound
 
-         # all orders should be bootstraped, except for the last time step
+        # all orders should be bootstraped, except for the last time step
         if time_updated and self.time < self.n_intervals:
-            expected_orders = 0.
-            for n in self.full_to_view_ind:
-                l = [r for r in self.orders_per_time_interval[self.time] if r[0] == n]
-                expected_orders += len(l)
+            expected_orders = len(self.orders_per_time_interval[self.time])
             for n in self.world.nodes():
                 if n not in self.full_to_view_ind:
                     assert self.world.nodes[n]['info'].get_order_num() == 0
