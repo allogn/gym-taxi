@@ -280,6 +280,8 @@ class TaxiEnv(gym.Env):
         if (self.hold_observation and time_updated) or (not self.hold_observation):
             observation, driver_max, order_max = self.get_observation()
             self.update_episode_logs_once_per_obs_update(driver_max, order_max)
+        else:
+            self.set_onehot_grid_id(self.last_time_step_obs)
 
         if time_updated:
             self.last_time_step_obs = observation
@@ -626,9 +628,6 @@ class TaxiEnv(gym.Env):
         time_one_hot = np.zeros((self.n_intervals))
         time_one_hot[self.time % self.n_intervals] = 1 # the very last moment (when its "done") is the first time interval of the next epoch
 
-        onehot_grid_id = np.zeros((view_size))
-        onehot_grid_id[self.full_to_view_ind[self.current_node_id]] = 1
-
         observation = np.zeros(self.observation_space_shape)
         observation[:view_size] = next_state[0, :]
         observation[view_size:2*view_size] = next_state[1, :]
@@ -642,7 +641,7 @@ class TaxiEnv(gym.Env):
         observation[2*view_size:3*view_size] = idle_drivers_per_node
 
         observation[3*view_size:3*view_size+self.n_intervals] = time_one_hot
-        observation[3*view_size+self.n_intervals:4*view_size+self.n_intervals] = onehot_grid_id
+        self.set_onehot_grid_id(observation)
 
         if self.include_income_to_observation:
             observation[4*view_size+self.n_intervals:] = self.get_income_per_node(idle_drivers_per_node)
@@ -654,6 +653,12 @@ class TaxiEnv(gym.Env):
         
         assert (observation >= 0).all() and (observation <= 1).all()
         return observation, driver_max, order_max
+
+    def set_onehot_grid_id(self, observation) -> None:
+        view_size = len(self.full_to_view_ind)
+        onehot_grid_id = np.zeros((view_size))
+        onehot_grid_id[self.full_to_view_ind[self.current_node_id]] = 1
+        observation[3*view_size+self.n_intervals:4*view_size+self.n_intervals] = onehot_grid_id
 
     def get_income_per_node(self, idle_drivers_per_node):
         """
