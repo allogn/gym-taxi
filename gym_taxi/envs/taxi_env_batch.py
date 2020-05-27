@@ -98,10 +98,11 @@ class TaxiEnvBatch(TaxiEnv):
         for i in range(cells_with_nonzero_drivers):
             a = self.full_to_view_ind[self.current_node_id]*self.action_space_shape[0]
             action_per_cell = action[a:a+self.action_space_shape[0]]
-            _, reward, done, info = super(TaxiEnvBatch, self).step(action_per_cell)
+            cell_id_that_brings_reward = self.current_node_id
+            observation_per_cell, reward, done, info = super(TaxiEnvBatch, self).step(action_per_cell)
             last_info = info
 
-            reward_per_node[self.full_to_view_ind[self.current_node_id]] = reward
+            reward_per_node[self.full_to_view_ind[cell_id_that_brings_reward]] += reward
             global_reward += reward
             total_served_orders += info['served_orders']
 
@@ -109,9 +110,11 @@ class TaxiEnvBatch(TaxiEnv):
             assert i == cells_with_nonzero_drivers-1 or self.done == False
 
         global_observation = self.get_global_observation()
+        # print(global_observation)
         assert (not self.done) or (self.time == self.n_intervals)
         assert self.time > init_t # has to be incremented, but might have several steps passed (if no drivers to control/dispatch)
 
+        assert np.abs(np.sum(reward_per_node) - global_reward) < 0.0001
         global_info = {"reward_per_node": reward_per_node,
                         "served_orders": total_served_orders,
                         "driver normalization constant": self.episode_logs["driver normalization constant"], # required for cA2C
@@ -136,3 +139,14 @@ class TaxiEnvBatch(TaxiEnv):
         print("One-Hot Time:", global_observation[world_size*3:t])
         if self.include_income_to_observation:
             print("Incomes:", global_observation[t:])
+
+    def print_observation_per_cell(self, obs):
+        world_size = len(self.full_to_view_ind)
+        print("Drivers distribution:", obs[:world_size])
+        print("Order distribution:", obs[world_size:world_size*2])
+        print("Idle distribution:", obs[2*world_size:world_size*3])
+        t = self.n_intervals
+        print("One-Hot Time:", obs[world_size*3:world_size*3+t])
+        print("One-Hot Node:", obs[world_size*3+t:world_size*4+t])
+        if self.include_income_to_observation:
+            print("Incomes:", obs[t:])

@@ -24,24 +24,24 @@ class Driver:
 
     def update_position(self, new_position):
         if self.DEBUG:
-            self.history.append("t={}: Moving from position {} to {}".format(self.position, new_position, self.env.time))
+            self.history.append("t={}, id={}: Moving from position {} to {}".format(self.env.time, self.driver_id, self.position, new_position))
         self.position = new_position
 
     def set_inactive(self):
         if self.DEBUG:
-            self.history.append("t={}: Status updated to 0".format(self.env.time))
+            self.history.append("t={}, id={}: Status updated to 0".format(self.env.time, self.driver_id))
         self.status = 0
 
     def set_active(self):
         if self.DEBUG:
-            self.history.append("t={}: Status updated to 1".format(self.env.time))
+            self.history.append("t={}, id={}: Status updated to 1".format(self.env.time, self.driver_id))
         self.status = 1
 
     def add_income(self, s):
         t = self.get_income()
         self.income += s
         if self.DEBUG:
-            self.history.append("t={}: Income increased by {}".format(self.env.time, s))
+            self.history.append("t={}, id={}: Income increased by {}".format(self.env.time, self.driver_id, s))
         return self.get_income() - t
 
     def get_income(self):

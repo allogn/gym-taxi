@@ -720,6 +720,9 @@ class TaxiEnv(gym.Env):
     def get_observation_space_shape(self):
         return self.observation_space_shape
 
+    def get_view_size(self):
+        return len(self.full_to_view_ind)
+
     def set_income_bound(self, bound):
         for d in self.all_driver_list:
             d.income_bound = bound
