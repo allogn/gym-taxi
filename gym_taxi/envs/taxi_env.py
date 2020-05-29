@@ -231,7 +231,7 @@ class TaxiEnv(gym.Env):
             info["nodes_with_orders"] += 1 if node.get_order_num() > 0 else 0
             info["nodes_with_drivers"] += 1 if node.get_driver_num() > 0 else 0
 
-        dispatch_actions = self.get_dispatch_actions_from_action(action)
+        dispatch_actions, unmasked_sum = self.get_dispatch_actions_from_action(action)
 
         if self.DEBUG:
             # number of actions should be equal to number of idle drivers, since
@@ -247,6 +247,9 @@ class TaxiEnv(gym.Env):
             self.this_timestep_dispatch[k] = self.this_timestep_dispatch.get(k,0) + d[1] 
 
         reward = self.calculate_reward(dispatch_actions_with_drivers)
+        penalty = 1000*unmasked_sum
+        reward -= penalty
+        info['unmasked_penalty'] = penalty
 
         t3 = time.time()
         time_updated = False
@@ -443,7 +446,9 @@ class TaxiEnv(gym.Env):
         masked_action[node_degree:-1] = 0
         if np.sum(masked_action) == 0:
             masked_action = np.ones(masked_action.shape)
+        unmasked_sum = np.sum(action[node_degree:-1])
         masked_action /= np.sum(masked_action)
+        # print(masked_action, action, unmasked_sum)
 
         actionlist = []
         if idle_drivers > 0:
@@ -451,7 +456,7 @@ class TaxiEnv(gym.Env):
             for k in targets:
                 actionlist.append((k, targets[k], -self.wc, 1))
 
-        return driver_to_order_list + actionlist
+        return driver_to_order_list + actionlist, unmasked_sum
 
     def make_order_dispatch_list_and_remove_orders(self):
         '''
