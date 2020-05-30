@@ -91,6 +91,8 @@ class TaxiEnv(gym.Env):
         '''
         self.seed(seed)
         self.DEBUG = debug
+        if self.DEBUG:
+            logging.info("DEBUG mode is active for taxi_env")
         self.number_of_resets = 0
 
         # Setting simulator parameters
@@ -466,7 +468,7 @@ class TaxiEnv(gym.Env):
         node = self.world.nodes[self.current_node_id]['info']
         orders_to_dispatch = min([node.get_driver_num(), node.get_order_num()])
         dispatch_list = []
-        for order in node.select_and_remove_orders(orders_to_dispatch):
+        for order in node.select_and_remove_orders(orders_to_dispatch, self.random):
             assert order[0] == node.node_id
             assert self.time == order[2] % self.n_intervals
             target = order[1]
@@ -485,7 +487,7 @@ class TaxiEnv(gym.Env):
                     nnode = self.world.nodes[n]['info']
                     available_orders = max(0, nnode.get_order_num() - nnode.get_driver_num())
                     orders_to_dispatch = min(available_orders, leftover_drivers)
-                    for order in nnode.select_and_remove_orders(orders_to_dispatch):
+                    for order in nnode.select_and_remove_orders(orders_to_dispatch, self.random):
                         assert order[0] == nnode.node_id
                         assert self.time == order[2] % self.n_intervals
                         dispatch_list.append((order[1], 1, order[4], order[3]))

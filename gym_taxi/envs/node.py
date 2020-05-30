@@ -29,12 +29,12 @@ class Node:
     def get_order_num(self):
         return len(self.orders)
 
-    def select_and_remove_orders(self, number_of_orders):
+    def select_and_remove_orders(self, number_of_orders, random_state):
         assert number_of_orders <= len(self.orders)
         assert number_of_orders >= 0
         if number_of_orders == 0:
             return []
-        np.random.shuffle(self.orders)
+        random_state.shuffle(self.orders)
         selected = self.orders[:number_of_orders]
         self.orders = self.orders[number_of_orders:]
         return selected
