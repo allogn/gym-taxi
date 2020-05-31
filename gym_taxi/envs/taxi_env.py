@@ -92,7 +92,7 @@ class TaxiEnv(gym.Env):
         self.seed(seed)
         self.DEBUG = debug
         if self.DEBUG:
-            logging.info("DEBUG mode is active for taxi_env")
+            logging.warning("DEBUG mode is active for taxi_env")
         self.number_of_resets = 0
 
         # Setting simulator parameters
@@ -178,7 +178,7 @@ class TaxiEnv(gym.Env):
         self.traveling_pool = {} # lists of drivers in traveling state, indexed by arrival time
         for i in range(self.n_intervals+1): # the last element contains all drivers arriving out of the episode
             self.traveling_pool[i] = []
-        self.bootstrap_orders()
+        self.last_total_orders = self.bootstrap_orders()
         self.bootstrap_drivers()
         self.find_non_empty_nodes()
         updated = not self.update_current_node_id()
@@ -223,15 +223,18 @@ class TaxiEnv(gym.Env):
 
         t1 = time.time()
         info = {
-            "total_orders": 0,
+            "total_orders": self.last_total_orders,
+            "left_orders": 0,
             "nodes_with_orders": 0,
             "nodes_with_drivers": 0
         }
-        for n, _ in self.full_to_view_ind.items():
-            node = self.world.nodes[n]['info']
-            info["total_orders"] += node.get_order_num()
-            info["nodes_with_orders"] += 1 if node.get_order_num() > 0 else 0
-            info["nodes_with_drivers"] += 1 if node.get_driver_num() > 0 else 0
+        if self.DEBUG:
+            # saving time on large scale
+            for n, _ in self.full_to_view_ind.items():
+                node = self.world.nodes[n]['info']
+                info["left_orders"] += node.get_order_num()
+                info["nodes_with_orders"] += 1 if node.get_order_num() > 0 else 0
+                info["nodes_with_drivers"] += 1 if node.get_driver_num() > 0 else 0
 
         dispatch_actions, unmasked_sum = self.get_dispatch_actions_from_action(action)
 
@@ -273,7 +276,7 @@ class TaxiEnv(gym.Env):
             t = time.time()
             if self.done:
                 break
-            self.bootstrap_orders()
+            self.last_total_orders = self.bootstrap_orders()
             self.find_non_empty_nodes()
             order_time += time.time() - t
 
@@ -367,17 +370,21 @@ class TaxiEnv(gym.Env):
             self.world.nodes[driver.position]['info'].add_driver(driver)
         self.traveling_pool[self.time] = []
 
-    def bootstrap_orders(self) -> None:
+    def bootstrap_orders(self) -> int:
         '''
         Remove remaining orders and add new orders.
         Orders wait only one time interval.
         Orders are dispatched only in the view, to save time.
+        
+        :return: total_orders
         '''
         for n in self.full_to_view_ind:
             self.world.nodes[n]['info'].clear_orders()
 
         for r in self.orders_per_time_interval[self.time]:
             self.world.nodes[r[0]]['info'].add_order(r)
+
+        return len(self.orders_per_time_interval[self.time])
 
     def bootstrap_drivers(self) -> None:
         """
@@ -446,11 +453,12 @@ class TaxiEnv(gym.Env):
 
         masked_action = np.copy(action)
         masked_action[node_degree:-1] = 0
-        if np.sum(masked_action) == 0:
-            masked_action = np.ones(masked_action.shape)
+        s = np.sum(masked_action)
+        if s == 0:
+            masked_action.fill(1. / len(masked_action))
+        else:
+            masked_action /= s
         unmasked_sum = np.sum(action[node_degree:-1])
-        masked_action /= np.sum(masked_action)
-        # print(masked_action, action, unmasked_sum)
 
         actionlist = []
         if idle_drivers > 0:
@@ -614,7 +622,7 @@ class TaxiEnv(gym.Env):
         self.random.shuffle(self.non_empty_nodes)
 
     def get_driver_and_order_distr(self) -> Array[int]:
-        next_state = np.zeros((2, len(self.full_to_view_ind)))
+        next_state = np.empty((2, len(self.full_to_view_ind)))
         for n, _ in self.full_to_view_ind.items():
             node = self.world.nodes[n]['info']
             next_state[0, self.full_to_view_ind[node.node_id]] = node.get_driver_num()
@@ -631,41 +639,50 @@ class TaxiEnv(gym.Env):
         '''
         view_size = len(self.full_to_view_ind)
         next_state = self.get_driver_and_order_distr()
+        m = np.max(next_state, axis=1)
+        driver_max = m[0]
+        order_max = m[1]
 
-        time_one_hot = np.zeros((self.n_intervals))
-        time_one_hot[self.time % self.n_intervals] = 1 # the very last moment (when its "done") is the first time interval of the next epoch
-
-        observation = np.zeros(self.observation_space_shape)
-        observation[:view_size] = next_state[0, :]
-        observation[view_size:2*view_size] = next_state[1, :]
+        time_and_grid_one_hot = np.zeros((self.n_intervals + view_size))
+        time_and_grid_one_hot[self.time % self.n_intervals] = 1 # the very last moment (when its "done") is the first time interval of the next epoch
 
         idle_drivers_per_node = next_state[0, :] - next_state[1, :]
         idle_drivers_per_node[idle_drivers_per_node < 0] = 0
-        assert (idle_drivers_per_node >= 0).all()
-        if np.sum(idle_drivers_per_node) > 0:
-            idle_drivers_per_node /= np.max(idle_drivers_per_node)
-        assert np.max(idle_drivers_per_node) == 1 or np.max(idle_drivers_per_node) == 0
-        observation[2*view_size:3*view_size] = idle_drivers_per_node
 
-        observation[3*view_size:3*view_size+self.n_intervals] = time_one_hot
-        self.set_onehot_grid_id(observation)
+        max_idle_driver = np.max(idle_drivers_per_node)
+        if max_idle_driver > 0:
+            idle_drivers_per_node /= max_idle_driver
+
+        if self.DEBUG:
+            assert (idle_drivers_per_node >= 0).all()
+            assert np.max(idle_drivers_per_node) == 1 or np.max(idle_drivers_per_node) == 0
+
+        obs_components = [
+            next_state[0, :], 
+            next_state[1, :], 
+            idle_drivers_per_node, 
+            time_and_grid_one_hot
+        ]
 
         if self.include_income_to_observation:
-            observation[4*view_size+self.n_intervals:] = self.get_income_per_node(idle_drivers_per_node)
+            obs_components.append(self.get_income_per_node(idle_drivers_per_node))
 
-        driver_max = np.max(observation[:view_size])
-        order_max = np.max(observation[view_size:2*view_size])
+        observation = np.concatenate(obs_components)
+        self.set_onehot_grid_id(observation)
+
         observation[:view_size] /= max(driver_max, 1)
         observation[view_size:2*view_size] /= max(order_max, 1)
         
-        assert (observation >= 0).all() and (observation <= 1).all()
+        if self.DEBUG:
+            assert (observation >= 0).all() and (observation <= 1).all()
         return observation, driver_max, order_max
 
     def set_onehot_grid_id(self, observation) -> None:
         view_size = len(self.full_to_view_ind)
-        onehot_grid_id = np.zeros((view_size))
-        onehot_grid_id[self.full_to_view_ind[self.current_node_id]] = 1
-        observation[3*view_size+self.n_intervals:4*view_size+self.n_intervals] = onehot_grid_id
+        offset = 3*view_size+self.n_intervals
+        ind = self.full_to_view_ind[self.current_node_id]
+        observation[offset: offset + view_size] = 0
+        observation[offset + ind] = 1
 
     def get_income_per_node(self, idle_drivers_per_node):
         """
