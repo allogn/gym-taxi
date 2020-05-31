@@ -711,7 +711,7 @@ class TaxiEnv(gym.Env):
         assert np.max(income) == 1 or np.sum(income) == 0
         return income
 
-    def seed(self, seed = None):
+    def seed(self, seed):
         self.random = np.random.RandomState(seed)
 
     @staticmethod
