@@ -29,7 +29,7 @@ gym.envs.register(
     }
 )
 
-DATA_PATH = os.path.join(os.environ['ALLDATA_PATH'], "macaoFiles", "taxi_env_batch_test")
+DATA_PATH = ... # place data path here
 if os.path.isdir(DATA_PATH):
     shutil.rmtree(DATA_PATH)
 os.makedirs(DATA_PATH)

@@ -59,7 +59,8 @@ class TaxiEnv(gym.Env):
         :param weight_poorest: multiply reward of each car by softmax of their income so far
         :param normalize_rewards: divide a reward per cell by number of cars in a cell
         :param minimum_reward: return reward as minimum income per driver per cell
-        :param reward_bound: return reward such that no car can earn more than this bound
+        :param reward_bound: return reward such that no car can earn more than this bound 
+                            (in fact, it is the income bound, not very good naming. reward might be different)
         :param include_income_to_observation: observation includes car income distribution
         :param poorest_first: assignment strategy such that poorest drivers get assigned first
         :param idle_reward: reward by the time a driver is idle rather than by income
@@ -118,7 +119,7 @@ class TaxiEnv(gym.Env):
         self.poorest_first = poorest_first
         self.idle_reward = idle_reward
         self.minimum_reward = minimum_reward 
-        self.reward_bound = reward_bound
+        self.income_bound = reward_bound
         self.weight_poorest = weight_poorest 
         self.count_neighbors = count_neighbors
         self.normalize_rewards = normalize_rewards
@@ -396,7 +397,7 @@ class TaxiEnv(gym.Env):
             assert driver_num >= 0
             n[1]['info'].clear_drivers()
             for i in range(driver_num):
-                driver = Driver(len(self.all_driver_list), self, self.reward_bound)
+                driver = Driver(len(self.all_driver_list), self, self.income_bound)
                 self.all_driver_list.append(driver)
                 self.driver_dict[driver.driver_id] = driver
                 n[1]['info'].add_driver(driver)
@@ -555,13 +556,13 @@ class TaxiEnv(gym.Env):
                 else:
                     driver_reward = driver_total_income_increase
 
-                if self.reward_bound is not None:
+                if self.income_bound is not None:
                     # if we bound the max income of a driver, then we add each driver independently,
                     # since their income might differ depending on their history
                     dispatch_actions_with_drivers.append([a[0], 1, driver_reward, a[3], [d.driver_id]])
                 added_drivers.append(d.driver_id)
 
-            if self.reward_bound is None:
+            if self.income_bound is None:
                 # if we don't bound ther income of a driver, then we return the action and the list of assigned drivers
                 dispatch_actions_with_drivers.append([ai for ai in a] + [added_drivers])
         node.clear_drivers()
@@ -748,6 +749,7 @@ class TaxiEnv(gym.Env):
         return len(self.full_to_view_ind)
 
     def set_income_bound(self, bound):
+        self.income_bound = bound
         for d in self.all_driver_list:
             d.income_bound = bound
 
@@ -765,8 +767,8 @@ class TaxiEnv(gym.Env):
             for d in n[1]['info'].drivers:
                 assert d.status == 1
                 assert d.position == n[0]
-                if self.reward_bound is not None:
-                    assert d.income_bound == self.reward_bound
+                if self.income_bound is not None:
+                    assert d.income_bound == self.income_bound
 
         # all orders should be bootstraped, except for the last time step
         if time_updated and self.time < self.n_intervals:
