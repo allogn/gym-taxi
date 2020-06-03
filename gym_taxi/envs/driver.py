@@ -1,4 +1,5 @@
 import copy
+import numpy as np
 
 class Driver:
 
@@ -45,10 +46,11 @@ class Driver:
         return self.get_income() - t
 
     def get_income(self):
-        if self.income_bound is None:
+        if self.income_bound is None or self.income < self.income_bound:
             return self.income
         else:
-            return min(self.income_bound, self.income)
+            return self.income_bound + (self.income - self.income_bound)*np.exp(-(self.income/self.income_bound))
+            # return min(self.income_bound, self.income)
 
     def sync(self, another_driver):
         assert self.driver_id == another_driver.driver_id

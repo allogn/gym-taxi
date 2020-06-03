@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 from gym_taxi.envs.node import Node
 from gym_taxi.envs.driver import Driver
+from gym_taxi.envs.helpers import *
 
 ActionList = List[Tuple[int, int, float, int]]
 
@@ -166,6 +167,7 @@ class TaxiEnv(gym.Env):
             'nodes_with_drivers': [],
             'nodes_with_orders': [],
             'rewards': [],
+            'gini': 0.,
             "total_steps": 0., # must be float for type check in callbacks
             'last_time_step': 0.
         })
@@ -318,6 +320,7 @@ class TaxiEnv(gym.Env):
             "driver normalization constant": float(driver_max), 
             "order normalization constant": float(order_max)
         })
+        self.episode_logs["gini"] = gini(self.episode_logs["driver_income"])
 
     def update_episode_logs_each_step(self, reward, dispatch_actions, info):
         self.episode_logs["number_of_idle_drivers"].append(sum([a[1] for a in dispatch_actions if a[2] <= 0]))
@@ -694,14 +697,17 @@ class TaxiEnv(gym.Env):
         for n, _ in self.full_to_view_ind.items():
             node = self.world.nodes[n]['info']
             if self.idle_reward == False:
-                driver_incomes = [d.get_income() for d in node.drivers]
+                if self.income_bound is not None:
+                    driver_incomes = [max(0,self.income_bound - d.income) for d in node.drivers]
+                else:
+                    driver_incomes = [d.income for d in node.drivers]
             else:
                 driver_incomes = [d.get_not_idle_periods() for d in node.drivers]
 
             if self.poorest_first:
                 driver_incomes = sorted(driver_incomes)[-int(idle_drivers_per_node[n]):]
                 
-            income[n] = 0 if len(driver_incomes) == 0 else np.min(driver_incomes)
+            income[n] = 0 if len(driver_incomes) == 0 else np.mean(driver_incomes) # alternatively, np.min
 
         # normalization. Note that income might be negative
         income -= np.min(income)
