@@ -34,11 +34,13 @@ class TaxiEnvBatch(TaxiEnv):
                  poorest_first: bool = False,
                  idle_reward: bool = False,
                  seed: int = 0,
+                 penalty_for_invalid_action: float = 0,
                  debug: bool = True) -> None:
         super(TaxiEnvBatch, self).__init__(world, orders, order_sampling_rate, drivers_per_node,
                                 n_intervals, wc, count_neighbors,
                                 weight_poorest, normalize_rewards, minimum_reward, reward_bound,
-                                include_income_to_observation, poorest_first, idle_reward, seed, True, debug)
+                                include_income_to_observation, poorest_first, idle_reward, seed, True, 
+                                penalty_for_invalid_action, debug)
 
     def set_action_and_observation_space(self, max_degree, world_size, n_intervals):
         super(TaxiEnvBatch, self).set_action_and_observation_space(max_degree, world_size, n_intervals)

@@ -46,11 +46,15 @@ class Driver:
         return self.get_income() - t
 
     def get_income(self):
-        if self.income_bound is None or self.income < self.income_bound:
-            return self.income
-        else:
-            return self.income_bound + (self.income - self.income_bound)*np.exp(-(self.income/self.income_bound))
-            # return min(self.income_bound, self.income)
+        ## here is one idea of adding exponential decrease when exceeding bound, to continue leading the solver
+        # to the correct solution, 
+        # but this could be alos fixed by increasing nu of robust solver, so no need
+
+        # if self.income_bound is None or self.income < self.income_bound:
+        #     return self.income
+        # else:
+        #     return self.income_bound + (self.income - self.income_bound)*np.exp(-(self.income/self.income_bound))
+        return min(self.income_bound, self.income) if self.income_bound is not None else self.income
 
     def sync(self, another_driver):
         assert self.driver_id == another_driver.driver_id

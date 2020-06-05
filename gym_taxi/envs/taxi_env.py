@@ -42,6 +42,7 @@ class TaxiEnv(gym.Env):
                  idle_reward: bool = False, 
                  seed: int = None,
                  hold_observation: bool = True,
+                 penalty_for_invalid_action: float = 0,
                  debug: bool = True) -> None: 
         '''
         :param world: undirected networkx graph that represents spatial cells for drivers to travel
@@ -68,6 +69,7 @@ class TaxiEnv(gym.Env):
         :param seed: seed for a random state
         :param hold_observation: at each step return observation as like in the beginning of the time interval (true)
                                     or like after applying changes to the previous node (false)
+        :param penalty_for_invalid_action: reward is decreased by this coef * sum(invalid action)
         :param debug: extra consistency checks
 
         Change self.DEBUG to False in __init__() to disable consistency checks per iteration.
@@ -126,6 +128,7 @@ class TaxiEnv(gym.Env):
         self.normalize_rewards = normalize_rewards
         self.include_income_to_observation = include_income_to_observation
         self.hold_observation = hold_observation
+        self.penalty_for_invalid_action = penalty_for_invalid_action
 
         self.drivers_per_node = np.array(drivers_per_node)
         assert self.drivers_per_node.dtype == int
@@ -255,7 +258,7 @@ class TaxiEnv(gym.Env):
             self.this_timestep_dispatch[k] = self.this_timestep_dispatch.get(k,0) + d[1] 
 
         reward = self.calculate_reward(dispatch_actions_with_drivers)
-        penalty = 1000*unmasked_sum
+        penalty = unmasked_sum * self.penalty_for_invalid_action
         reward -= penalty
         info['unmasked_penalty'] = penalty
 
