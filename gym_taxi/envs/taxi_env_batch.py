@@ -34,7 +34,7 @@ class TaxiEnvBatch(TaxiEnv):
                  poorest_first: bool = False,
                  idle_reward: bool = False,
                  seed: int = 0,
-                 penalty_for_invalid_action: float = 0,
+                 penalty_for_invalid_action: float = 1000,
                  debug: bool = True) -> None:
         super(TaxiEnvBatch, self).__init__(world, orders, order_sampling_rate, drivers_per_node,
                                 n_intervals, wc, count_neighbors,

@@ -42,7 +42,7 @@ class TaxiEnv(gym.Env):
                  idle_reward: bool = False, 
                  seed: int = None,
                  hold_observation: bool = True,
-                 penalty_for_invalid_action: float = 0,
+                 penalty_for_invalid_action: float = 1000,
                  debug: bool = True) -> None: 
         '''
         :param world: undirected networkx graph that represents spatial cells for drivers to travel
