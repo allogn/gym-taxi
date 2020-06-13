@@ -43,6 +43,7 @@ class TaxiEnv(gym.Env):
                  seed: int = None,
                  hold_observation: bool = True,
                  penalty_for_invalid_action: float = 1000,
+                 driver_automatic_return: bool = True,
                  debug: bool = True) -> None: 
         '''
         :param world: undirected networkx graph that represents spatial cells for drivers to travel
@@ -70,6 +71,9 @@ class TaxiEnv(gym.Env):
         :param hold_observation: at each step return observation as like in the beginning of the time interval (true)
                                     or like after applying changes to the previous node (false)
         :param penalty_for_invalid_action: reward is decreased by this coef * sum(invalid action)
+        :param driver_automatic_return: if a view is used and the driver is sent outside the view, then setting 
+                                        this to true makes the driver to appear in the closest node within view
+                                        assuming that it drives back as soon as the customer is delivered
         :param debug: extra consistency checks
 
         Change self.DEBUG to False in __init__() to disable consistency checks per iteration.
@@ -129,6 +133,7 @@ class TaxiEnv(gym.Env):
         self.include_income_to_observation = include_income_to_observation
         self.hold_observation = hold_observation
         self.penalty_for_invalid_action = penalty_for_invalid_action
+        self.driver_automatic_return = driver_automatic_return
 
         self.drivers_per_node = np.array(drivers_per_node)
         assert self.drivers_per_node.dtype == int
@@ -486,8 +491,11 @@ class TaxiEnv(gym.Env):
         for order in node.select_and_remove_orders(orders_to_dispatch, self.random):
             assert order[0] == node.node_id
             assert self.time == order[2] % self.n_intervals
-            target = order[1]
-            length = order[3]
+            if self.driver_automatic_return:
+                target, length = self.calculate_target_and_length_of_trip(order[1], order[3])
+            else:
+                target = order[1]
+                length = order[3]
             assert(length > 0)
             price = order[4]
             dispatch_list.append((target, 1, price, length))
@@ -511,6 +519,36 @@ class TaxiEnv(gym.Env):
                         break
 
         return dispatch_list
+
+    def calculate_target_and_length_of_trip(self, target, length):
+        '''
+        A car is sent to target, taking length time steps. The target can be outside the current view.
+        If so, find a node that is closest to the target, and assume the car "automatically" returns there
+        after serving the customer.
+
+        Length for the return trip costs one hop per iteration.
+
+        Assuming that the source node is the current_node_id
+
+        :return: (new target, new length), where new length is the one for the whole trip
+        '''
+        if target in self.full_to_view_ind:
+            return target, length
+
+        # find a path from the target to the source node, and the closest node within the view in the path
+        path = nx.shortest_path(self.world, target, self.current_node_id)
+        assert path[0] not in self.full_to_view_ind
+        first_node_in_view = None
+        checked_nodes = 0
+        for n in path:
+            if n in self.full_to_view_ind:
+                first_node_in_view = n
+            if first_node_in_view is not None:
+                break
+            checked_nodes += 1
+        assert first_node_in_view is not None
+        left_hops = len(path) - checked_nodes
+        return first_node_in_view, left_hops + length
 
     def dispatch_drivers(self, dispatch_action_list: ActionList) -> Tuple:
         '''

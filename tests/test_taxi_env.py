@@ -303,3 +303,27 @@ class TestTaxiEnv:
         assert obs[3*view_size+10:].shape == (3,)
         assert (obs[3*view_size+10:] == np.array([1,0,0])).all() or  (obs[3*view_size+10:] == np.array([0,1,0])).all()
         assert [d.position for d in env.all_driver_list] == [0, 1, 1, 2, 3, 5]
+
+    def test_automatic_return(self):
+        """
+        Check linear graph: half of the graph is outside the view, and the car that was sent outside
+        is returning automatically to the nearest node in the view.
+        """
+        g = nx.Graph()
+        g.add_edges_from([(0,1),(1,2),(2,3),(3,4),(4,5)])
+        nx.set_node_attributes(g, {0: (0,1), 1: (0,2), 2: (0,3), 3: (0,4), 4: (0,5), 5: (0,6)}, name="coords")
+        orders = [(1,4,0,10,80)]
+        drivers = np.array([0,1,0,0,0,0])
+        action = np.array([0, 0, 0], dtype=float)
+
+        env = TaxiEnv(g, orders, 1, drivers, 30)
+        env.set_view([0,1,2])
+        env.step(action)
+        # check that the final destination of the car is the node 2, in (10+2) intervals
+        # after performing step(), the env should set current_node_id to 2, and time to 12
+        assert env.time == 12
+        assert env.current_node_id == 2
+        d = env.all_driver_list[0]
+        d.status = 1
+        d.income = 80
+        d.position = 2
