@@ -390,11 +390,17 @@ class TaxiEnv(gym.Env):
         
         :return: total_orders
         '''
-        for n in self.full_to_view_ind:
-            self.world.nodes[n]['info'].clear_orders()
+
+        ## we need to go through all nodes in the network because the env can be initialized with all nodes in the view
+        ## and then orders are drivers are bootstrapped over all the network.
+        # for n in self.full_to_view_ind:
+        for n in self.world.nodes(data=True):
+            n[1]['info'].clear_orders()
+            # self.world.nodes[n]['info'].clear_orders()
 
         for r in self.orders_per_time_interval[self.time]:
-            self.world.nodes[r[0]]['info'].add_order(r)
+            if r[0] in self.full_to_view_ind:
+                self.world.nodes[r[0]]['info'].add_order(r)
 
         return len(self.orders_per_time_interval[self.time])
 
@@ -824,7 +830,8 @@ class TaxiEnv(gym.Env):
                 if n not in self.full_to_view_ind:
                     assert self.world.nodes[n]['info'].get_order_num() == 0
             number_of_orders = sum([n[1]['info'].get_order_num() for n in self.world.nodes(data=True)])
-            assert expected_orders == number_of_orders, (expected_orders, number_of_orders)
+            # some orders in orders_per_time_interval may not be assigned to the nodes if out of the view
+            assert expected_orders >= number_of_orders, (expected_orders, number_of_orders)
 
         # Some nodes might have been considered in this time step already, some might not be.
         # Since for each considered node we update status to inactive, then
