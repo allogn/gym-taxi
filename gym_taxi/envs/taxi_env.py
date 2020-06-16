@@ -464,8 +464,8 @@ class TaxiEnv(gym.Env):
 
         self.served_orders = len(driver_to_order_list)
 
-        node_degree = self.world.degree(node)
-        neighbors = list(self.world.neighbors(node))
+        neighbors = self.get_node_neigbors_in_view(node)
+        node_degree = len(neighbors)
         missing_dimentions = len(action) - node_degree - 1
         neighbors += [0]*missing_dimentions + [node]
 
@@ -485,6 +485,9 @@ class TaxiEnv(gym.Env):
                 actionlist.append((k, targets[k], -self.wc, 1))
 
         return driver_to_order_list + actionlist, unmasked_sum
+
+    def get_node_neigbors_in_view(self, node):
+        return [n for n in self.world.neighbors(node) if n in self.full_to_view_ind]
 
     def make_order_dispatch_list_and_remove_orders(self):
         '''
@@ -509,7 +512,7 @@ class TaxiEnv(gym.Env):
         if self.count_neighbors:
             leftover_drivers = node.get_driver_num() - len(dispatch_list)
             if leftover_drivers > 0:
-                neighbor_list = list(self.world.neighbors(self.current_node_id))
+                neighbor_list = self.get_node_neigbors_in_view(self.current_node_id)
                 self.random.shuffle(neighbor_list)
                 # assign orders from neighbors if neighbors have not enough drivers
                 for n in neighbor_list:
@@ -639,13 +642,14 @@ class TaxiEnv(gym.Env):
         remain_drivers_1d = remain_drivers.flatten()
 
         if self.count_neighbors:
-            for curr_node_id in self.world.nodes():
-                for neighbor_id in self.world.neighbors(curr_node_id):
-                    a = remain_orders_1d[curr_node_id]
-                    b = remain_drivers_1d[neighbor_id]
-                    remain_orders_1d[curr_node_id] = max(a-b, 0)
-                    remain_drivers_1d[neighbor_id] = max(b-a, 0)
-                    if remain_orders_1d[curr_node_id] == 0:
+            for curr_node_id, curr_node_id_view in self.full_to_view_ind.items():
+                for neighbor_id in self.get_node_neigbors_in_view(curr_node_id):
+                    neighbor_id_view = self.full_to_view_ind[neighbor_id]
+                    a = remain_orders_1d[curr_node_id_view]
+                    b = remain_drivers_1d[neighbor_id_view]
+                    remain_orders_1d[curr_node_id_view] = max(a-b, 0)
+                    remain_drivers_1d[neighbor_id_view] = max(b-a, 0)
+                    if remain_orders_1d[curr_node_id_view] == 0:
                         break
 
         context = np.array([remain_drivers_1d, remain_orders_1d])
@@ -702,16 +706,18 @@ class TaxiEnv(gym.Env):
 
         max_idle_driver = np.max(idle_drivers_per_node)
         if max_idle_driver > 0:
-            idle_drivers_per_node /= max_idle_driver
+            idle_drivers_per_node_normalized = idle_drivers_per_node / max_idle_driver
+        else:
+            idle_drivers_per_node_normalized = np.array(idle_drivers_per_node)
 
         if self.DEBUG:
-            assert (idle_drivers_per_node >= 0).all()
-            assert np.max(idle_drivers_per_node) == 1 or np.max(idle_drivers_per_node) == 0
+            assert (idle_drivers_per_node_normalized >= 0).all()
+            assert np.max(idle_drivers_per_node_normalized) == 1 or np.max(idle_drivers_per_node_normalized) == 0
 
         obs_components = [
             next_state[0, :], 
             next_state[1, :], 
-            idle_drivers_per_node, 
+            idle_drivers_per_node_normalized, 
             time_and_grid_one_hot
         ]
 
@@ -735,13 +741,13 @@ class TaxiEnv(gym.Env):
         observation[offset: offset + view_size] = 0
         observation[offset + ind] = 1
 
-    def get_income_per_node(self, idle_drivers_per_node):
+    def get_income_per_node(self, idle_drivers_per_node_in_view):
         """
         :returns: a normalized vector of incomes of idle drivers in the whole world
         """
         view_size = len(self.full_to_view_ind)
         income = np.zeros(view_size)
-        for n, _ in self.full_to_view_ind.items():
+        for n, view_ind in self.full_to_view_ind.items():
             node = self.world.nodes[n]['info']
             if self.idle_reward == False:
                 if self.income_bound is not None:
@@ -752,9 +758,9 @@ class TaxiEnv(gym.Env):
                 driver_incomes = [d.get_not_idle_periods() for d in node.drivers]
 
             if self.poorest_first:
-                driver_incomes = sorted(driver_incomes)[-int(idle_drivers_per_node[n]):]
+                driver_incomes = sorted(driver_incomes)[-int(idle_drivers_per_node_in_view[view_ind]):] # idle_drivers_per_node is of a size of view
                 
-            income[n] = 0 if len(driver_incomes) == 0 else np.mean(driver_incomes) # alternatively, np.min
+            income[view_ind] = 0 if len(driver_incomes) == 0 else np.mean(driver_incomes) # alternatively, np.min
 
         # normalization. Note that income might be negative
         income -= np.min(income)
@@ -953,6 +959,8 @@ class TaxiEnv(gym.Env):
         for i in range(len(nodes)):
             self.full_to_view_ind[nodes[i]] = i
 
-        max_degree = np.max([d[1] for d in nx.degree(self.world) if d[0] in self.full_to_view_ind])
+        # create subgraph in order to calculate node degrees correctly
+        g = self.world.subgraph([k for k, _ in self.full_to_view_ind.items()])
+        max_degree = np.max([d[1] for d in nx.degree(g) if d[0] in self.full_to_view_ind])
         self.set_action_and_observation_space(max_degree, len(self.full_to_view_ind), self.n_intervals)
         self.init()
