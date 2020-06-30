@@ -44,6 +44,8 @@ class TaxiEnv(gym.Env):
                  hold_observation: bool = True,
                  penalty_for_invalid_action: float = 1000,
                  driver_automatic_return: bool = True,
+                 include_action_mask: bool = False,
+                 discrete: bool = False,
                  debug: bool = True) -> None: 
         '''
         :param world: undirected networkx graph that represents spatial cells for drivers to travel
@@ -74,6 +76,7 @@ class TaxiEnv(gym.Env):
         :param driver_automatic_return: if a view is used and the driver is sent outside the view, then setting 
                                         this to true makes the driver to appear in the closest node within view
                                         assuming that it drives back as soon as the customer is delivered
+        :param discrete: action space is discrete, applied per each car
         :param debug: extra consistency checks
 
         Change self.DEBUG to False in __init__() to disable consistency checks per iteration.
@@ -134,6 +137,8 @@ class TaxiEnv(gym.Env):
         self.hold_observation = hold_observation
         self.penalty_for_invalid_action = penalty_for_invalid_action
         self.driver_automatic_return = driver_automatic_return
+        self.include_action_mask = include_action_mask
+        self.discrete = discrete
 
         self.drivers_per_node = np.array(drivers_per_node)
         assert self.drivers_per_node.dtype == int
@@ -152,8 +157,12 @@ class TaxiEnv(gym.Env):
     
     def set_action_and_observation_space(self, max_degree, world_size, n_intervals):
         # set action space
-        self.action_space_shape = (max_degree+1,)
-        self.action_space = spaces.Box(low=0, high=1, shape=self.action_space_shape)
+        if self.discrete:
+            self.action_space = spaces.Discrete(max_degree+1)
+            self.max_action_id = max_degree # starting from 0
+        else:
+            self.action_space_shape = (max_degree+1,)
+            self.action_space = spaces.Box(low=0, high=1, shape=self.action_space_shape)
 
         # set observation space: distribution of drivers, orders, current cell and current time
         self.observation_space_shape = 4*world_size + n_intervals
@@ -214,7 +223,7 @@ class TaxiEnv(gym.Env):
     def get_number_of_resets(self) -> int:
         return self.number_of_resets
 
-    def step(self, action: Array[float]) -> Tuple[Array[int], float, bool, Dict]:
+    def step(self, action) -> Tuple[Array[int], float, bool, Dict]:
         """
         Applies the action, and returns observation.
         If self.hold_observation parameter is true (default), then
@@ -228,7 +237,12 @@ class TaxiEnv(gym.Env):
         if self.done:
             raise Exception("Trying to step terminated environment. Call reset first.")
         assert self.time < self.n_intervals
-        assert action.shape == self.action_space.shape, (action.shape, self.action_space.shape)
+
+        if self.discrete:
+            assert action >= 0 and action <= self.max_action_id
+        else:
+            assert action.shape == self.action_space.shape, (action.shape, self.action_space.shape)
+        
         if self.episode_logs['last_time_step'] == 0:
             assert self.time == 0
 
@@ -248,8 +262,10 @@ class TaxiEnv(gym.Env):
                 info["nodes_with_drivers"] += 1 if node.get_driver_num() > 0 else 0
 
         dispatch_actions, unmasked_sum = self.get_dispatch_actions_from_action(action)
+        if self.include_action_mask:
+            assert unmasked_sum == 0 # action_mask==1 can only hold for PPO, and if so, then no illegal actions expected
 
-        if self.DEBUG:
+        if self.DEBUG and not self.discrete:
             # number of actions should be equal to number of idle drivers, since
             # idle operation is a special case of dispatch operation
             assert sum([a[1] for a in dispatch_actions]) == self.world.nodes[self.current_node_id]['info'].get_driver_num(), \
@@ -313,10 +329,22 @@ class TaxiEnv(gym.Env):
         if self.DEBUG:
             # time increased, some drivers must avait for instructions or it is done
             self.check_consistency(time_updated) 
+
+        info['action_mask'] = self.get_action_mask()
+        
         t6 = time.time()
 
         self.time_profile += np.array([t6-t5, t5-t4, t4-t3, t3-t2, t2-t1])
         return self.last_time_step_obs if self.hold_observation else observation, reward, self.done, info
+
+    def get_action_mask(self):
+        n = self.max_action_id+1 if self.discrete else self.action_space_shape[0]
+        mask = np.ones((n), dtype=int)
+        if self.include_action_mask:
+            neighbors = self.get_node_neigbors_in_view(self.current_node_id)
+            node_degree = len(neighbors)
+            mask[node_degree:-1] = 0
+        return mask.tolist()
 
     def update_episode_logs_once_per_obs_update(self, driver_max, order_max):
         self.episode_logs.update({
@@ -348,6 +376,7 @@ class TaxiEnv(gym.Env):
         return self.last_episode_logs
 
     def set_orders_per_time_interval(self, orders: Tuple[int, int, int, int, float]) -> None:
+        assert len(orders) > 0, "Orders can not be empty"
         self.orders_per_time_interval = {}
         max_reward = 0
         for i in range(self.n_intervals+1): # last element is not filled and used to store final results
@@ -450,7 +479,7 @@ class TaxiEnv(gym.Env):
             reward = reward/np.sum([a[1] for a in dispatch_actions_with_drivers])
         return reward
 
-    def get_dispatch_actions_from_action(self, action: Array[float]) -> ActionList:
+    def get_dispatch_actions_from_action(self, action) -> ActionList:
         '''
         Number of dispatch actions should be equal to number of drivers in a cells.
         Dispatch actions may have destination repeated, because of possibly different price.
@@ -465,24 +494,31 @@ class TaxiEnv(gym.Env):
         self.served_orders = len(driver_to_order_list)
 
         neighbors = self.get_node_neigbors_in_view(node)
-        node_degree = len(neighbors)
-        missing_dimentions = len(action) - node_degree - 1
-        neighbors += [0]*missing_dimentions + [node]
-
-        masked_action = np.copy(action)
-        masked_action[node_degree:-1] = 0
-        s = np.sum(masked_action)
-        if s == 0:
-            masked_action.fill(1. / len(masked_action))
+        if self.discrete:
+            # send a single car to the destination defined by the action
+            if idle_drivers > 0:
+                assert action in neighbors
+                actionlist = [(action, 1, -self.wc, 1)]
+                unmasked_sum = 0 # asserting that we don't send cars outside the view (action is in neigbors)
         else:
-            masked_action /= s
-        unmasked_sum = np.sum(action[node_degree:-1])
+            node_degree = len(neighbors)
+            missing_dimentions = len(action) - node_degree - 1
+            neighbors += [0]*missing_dimentions + [node]
 
-        actionlist = []
-        if idle_drivers > 0:
-            targets = Counter(self.random.choice(neighbors, idle_drivers, p=masked_action))
-            for k in targets:
-                actionlist.append((k, targets[k], -self.wc, 1))
+            masked_action = np.copy(action)
+            masked_action[node_degree:-1] = 0
+            s = np.sum(masked_action)
+            if s == 0:
+                masked_action.fill(1. / len(masked_action))
+            else:
+                masked_action /= s
+            unmasked_sum = np.sum(action[node_degree:-1])
+
+            actionlist = []
+            if idle_drivers > 0:
+                targets = Counter(self.random.choice(neighbors, idle_drivers, p=masked_action))
+                for k in targets:
+                    actionlist.append((k, targets[k], -self.wc, 1))
 
         return driver_to_order_list + actionlist, unmasked_sum
 
@@ -493,9 +529,12 @@ class TaxiEnv(gym.Env):
         '''
         Create dispatch list from orders if drivers are available,
         and remove orders from nodes.
+        
+        In discrete version, all the orders are dispatched anyway, because its only the idle_drivers that are managed individually
         '''
         node = self.world.nodes[self.current_node_id]['info']
         orders_to_dispatch = min([node.get_driver_num(), node.get_order_num()])
+        
         dispatch_list = []
         for order in node.select_and_remove_orders(orders_to_dispatch, self.random):
             assert order[0] == node.node_id
@@ -509,8 +548,13 @@ class TaxiEnv(gym.Env):
             price = order[4]
             dispatch_list.append((target, 1, price, length))
 
-        if self.count_neighbors:
-            leftover_drivers = node.get_driver_num() - len(dispatch_list)
+        if self.count_neighbors and (orders_to_dispatch == 0 or not self.discrete): # if discrete and there are no orders in the node, 
+                                                                                    # assign to a neighbour
+            if self.discrete:
+                leftover_drivers = 1
+            else:
+                leftover_drivers = node.get_driver_num() - len(dispatch_list)
+
             if leftover_drivers > 0:
                 neighbor_list = self.get_node_neigbors_in_view(self.current_node_id)
                 self.random.shuffle(neighbor_list)
@@ -571,7 +615,8 @@ class TaxiEnv(gym.Env):
         dispatch_actions_with_drivers = []
         node = self.world.nodes[self.current_node_id]['info']
         if self.DEBUG:
-            assert np.sum([a[1] for a in dispatch_action_list]) == node.get_driver_num(), node.get_driver_num()
+            total_cars = np.sum([a[1] for a in dispatch_action_list])    
+            assert total_cars == 1 if self.discrete else node.get_driver_num(), node.get_driver_num()
         drivers = list(node.drivers)
 
         if self.poorest_first:
@@ -618,7 +663,11 @@ class TaxiEnv(gym.Env):
             if self.income_bound is None:
                 # if we don't bound ther income of a driver, then we return the action and the list of assigned drivers
                 dispatch_actions_with_drivers.append([ai for ai in a] + [added_drivers])
-        node.clear_drivers()
+        
+        node.drivers = drivers[i:]
+        if not self.discrete:
+            assert node.get_driver_num() == 0
+        
         return dispatch_actions_with_drivers
 
     def compute_remaining_drivers_and_orders(self, driver_customer_distr: Array[int, int]) -> Array[int, int]:
@@ -663,6 +712,11 @@ class TaxiEnv(gym.Env):
 
         return true if we need to increase time
         '''
+        if self.discrete and hasattr(self, 'current_node_id') and self.world.nodes[self.current_node_id]['info'].get_driver_num() > 0:
+            # allow to try to update node when using discrete, serving a node does not clear all the drivers
+            # if not all the drivers are dispatched in the current node, then don't update the current_node_id
+            return False
+
         while len(self.non_empty_nodes) > 0:
             self.current_node_id = self.non_empty_nodes.pop()
             # can be false positive due to neighbourhood matches
@@ -760,7 +814,7 @@ class TaxiEnv(gym.Env):
             if self.poorest_first:
                 driver_incomes = sorted(driver_incomes)[-int(idle_drivers_per_node_in_view[view_ind]):] # idle_drivers_per_node is of a size of view
                 
-            income[view_ind] = 0 if len(driver_incomes) == 0 else np.mean(driver_incomes) # alternatively, np.min
+            income[view_ind] = 0 if len(driver_incomes) == 0 else np.min(driver_incomes) # alternatively, np.mean. for discrete min is important because it shows who's next to go
 
         # normalization. Note that income might be negative
         income -= np.min(income)
@@ -935,6 +989,7 @@ class TaxiEnv(gym.Env):
         self.time = another_env.time
         self.episode_logs = copy.deepcopy(another_env.episode_logs)
         self.non_empty_nodes = another_env.non_empty_nodes
+        self.discrete = another_env.discrete
         self.current_node_id = another_env.current_node_id
         self.done = another_env.done
         self.last_episode_logs = another_env.last_episode_logs

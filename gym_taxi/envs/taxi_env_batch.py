@@ -41,7 +41,9 @@ class TaxiEnvBatch(TaxiEnv):
                                 n_intervals, wc, count_neighbors,
                                 weight_poorest, normalize_rewards, minimum_reward, reward_bound,
                                 include_income_to_observation, poorest_first, idle_reward, seed, True, 
-                                penalty_for_invalid_action, driver_automatic_return, debug)
+                                penalty_for_invalid_action, driver_automatic_return, False, False, debug)
+                                # include_action_mask is false because it is used only by PPO, that uses taxi_env directly
+                                # discrete is False because for testing in gym we use discrete taxi_env directly
 
     def set_action_and_observation_space(self, max_degree, world_size, n_intervals):
         super(TaxiEnvBatch, self).set_action_and_observation_space(max_degree, world_size, n_intervals)

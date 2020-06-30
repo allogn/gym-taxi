@@ -272,11 +272,12 @@ class TestTaxiEnv:
         g = nx.Graph()
         g.add_edges_from([(0,1),(1,2),(2,3),(3,4),(1,5)])
         nx.set_node_attributes(g, {0: (0,1), 1: (0,2), 2: (0,3), 3: (0,4), 4: (0,5), 5: (1,1)}, name="coords")
-        orders = [(3,2,2,3,3)]
+        orders = [(3,2,2,3,3)] # <source, destination, time, length, price>
         drivers = np.array([1,1,1,1,1,1])
         action = np.array([1, 0, 0], dtype=float)
 
         env = TaxiEnv(g, orders, 1, drivers, 10)
+        env.seed(123)
         env.set_view([2,3,4])
         obs, _, _ = env.get_observation()
 
@@ -287,22 +288,23 @@ class TestTaxiEnv:
         assert env.action_space_shape == (3,) # degree of 1 is 3, but of the rest is 2. So it should be 2 + 1 (staying action)
         assert env.current_node_id in [2,3,4]
 
+        # an action [1, 0, 0] for the node 2 means to go to node 3, because its the only neighbor in the view
         env.step(action)
         assert env.current_node_id in [2,3,4]
         env.step(action)
         assert env.current_node_id in [2,3,4]
         obs, rew, done, info = env.step(action)
-        assert (obs[:view_size] == np.array([1,1,0])).all()
+        assert (obs[:view_size] == np.array([0.5,1,0])).all() # there are 2 drivers in the node 3 at the end, one from node 2, one from node 4.
         assert (obs[view_size:2*view_size] == np.array([0,0,0])).all()
-        assert (obs[2*view_size:3*view_size] == np.array([1,1,0])).all()
+        assert (obs[2*view_size:3*view_size] == np.array([0.5,1,0])).all()
         # next time iteration should happen
         assert env.time == 1
         assert env.current_node_id in [2,3]
-        assert (obs[2*view_size:3*view_size] == np.array([1,1,0])).all()
+        assert (obs[2*view_size:3*view_size] == np.array([0.5,1,0])).all()
         assert (obs[3*view_size:3*view_size+10] == np.array([0,1,0,0,0,0,0,0,0,0])).all()
         assert obs[3*view_size+10:].shape == (3,)
         assert (obs[3*view_size+10:] == np.array([1,0,0])).all() or  (obs[3*view_size+10:] == np.array([0,1,0])).all()
-        assert [d.position for d in env.all_driver_list] == [0, 1, 1, 2, 3, 5]
+        assert [d.position for d in env.all_driver_list] == [0, 1, 3, 2, 3, 5]
 
     def test_automatic_return(self):
         """
@@ -327,3 +329,35 @@ class TestTaxiEnv:
         d.status = 1
         d.income = 80
         d.position = 2
+
+    def test_discrete(self):
+        g = nx.Graph()
+        g.add_edges_from([(0,1),(1,2),(0,2),(0,3),(1,3),(2,3)])
+        nx.set_node_attributes(g, {0: (0,0), 1: (0,1), 2: (1,0), 3: (1,1)}, name="coords")
+        orders = [(3,2,20,3,3)] # one fake order in a very long time <source, destination, time, length, price>
+        drivers = np.array([3,0,0,0])
+        actions = [1,2,3]
+
+        env = TaxiEnv(g, orders, 1, drivers, 30, discrete=True, poorest_first=True)
+        # update incomes of drivers
+        env.all_driver_list[0].income = 5
+        env.all_driver_list[1].income = 4
+        env.all_driver_list[2].income = 3
+
+        # grid network 2x2; 3 cars in top-left, with different income. Step actions to 3 other corners, then check positions.
+        for a in actions:
+            env.step(a)
+        
+        assert env.time == 1
+        assert env.current_node_id in [1,2,3]
+        d = env.all_driver_list[0]
+        assert d.income == 5
+        assert d.position == 3 # first action is 1, but 0th driver should be selected last
+        
+        d = env.all_driver_list[1]
+        assert d.income == 4
+        assert d.position == 2
+
+        d = env.all_driver_list[2]
+        assert d.income == 3
+        assert d.position == 1
