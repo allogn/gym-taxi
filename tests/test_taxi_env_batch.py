@@ -63,11 +63,11 @@ class TestTaxiEnvBatch:
 
         obs, rew, done, info = env.step(action)
         assert env.current_node_id in [2,3]
-        assert (obs[:view_size] == np.array([1,1,0])).all()
+        assert (obs[:view_size] == np.array([0.5,1,0])).all() # 0.5 because action takes into consideration only nodes in view, so there is no left-step from the 2nd (most left) node
         assert (obs[view_size:2*view_size] == np.array([0,0,0])).all()
-        assert (obs[2*view_size:3*view_size] == np.array([1,1,0])).all()
+        assert (obs[2*view_size:3*view_size] == np.array([0.5,1,0])).all()
         # next time iteration should happen
         assert env.time == 1
-        assert (obs[2*view_size:3*view_size] == np.array([1,1,0])).all()
+        assert (obs[2*view_size:3*view_size] == np.array([0.5,1,0])).all()
         assert (obs[3*view_size:] == np.array([0,1,0,0,0,0,0,0,0,0])).all()
-        assert [d.position for d in env.all_driver_list] == [0, 1, 1, 2, 3, 5]
+        assert [d.position for d in env.all_driver_list] == [0, 1, 3, 2, 3, 5]
