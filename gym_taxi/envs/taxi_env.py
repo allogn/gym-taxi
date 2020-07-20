@@ -4,6 +4,7 @@ from nptyping import Array
 from gym import spaces
 import numpy as np
 import networkx as nx
+import uuid
 import copy
 import math
 import time
@@ -101,6 +102,7 @@ class TaxiEnv(gym.Env):
         available drivers. That is, if all drivers are dispatched, we still count the step as valid.
         '''
         self.seed(seed)
+        self.env_id = str(uuid.uuid1())
         self.DEBUG = debug
         if self.DEBUG:
             logging.warning("DEBUG mode is active for taxi_env")
@@ -139,6 +141,8 @@ class TaxiEnv(gym.Env):
         self.driver_automatic_return = driver_automatic_return
         self.include_action_mask = include_action_mask
         self.discrete = discrete
+        if discrete:
+            assert self.include_action_mask
 
         self.drivers_per_node = np.array(drivers_per_node)
         assert self.drivers_per_node.dtype == int
@@ -320,6 +324,8 @@ class TaxiEnv(gym.Env):
 
         if time_updated:
             self.last_time_step_obs = observation
+            if self.DEBUG:
+                logging.info("New time step: {}".format(self.time))
 
         if self.done:
             self.last_episode_logs = copy.deepcopy(self.episode_logs)
@@ -331,6 +337,7 @@ class TaxiEnv(gym.Env):
             self.check_consistency(time_updated) 
 
         info['action_mask'] = self.get_action_mask()
+        info['time_updated'] = time_updated
         
         t6 = time.time()
 
@@ -368,7 +375,8 @@ class TaxiEnv(gym.Env):
         self.episode_logs["nodes_with_orders"].append(int(info['nodes_with_orders']))
         self.episode_logs["rewards"].append(float(reward))
         self.episode_logs["total_steps"] += 1. # total calls to "step" function
-        assert self.episode_logs["total_steps"] <= self.world_size * self.n_intervals
+        if not self.discrete:
+            assert self.episode_logs["total_steps"] <= self.world_size * self.n_intervals
 
     def get_episode_info(self):
         if self.last_episode_logs is None:
@@ -492,14 +500,24 @@ class TaxiEnv(gym.Env):
         idle_drivers = self.world.nodes[node]['info'].get_driver_num() - len(driver_to_order_list)
 
         self.served_orders = len(driver_to_order_list)
+        actionlist = []
 
         neighbors = self.get_node_neigbors_in_view(node)
         if self.discrete:
             # send a single car to the destination defined by the action
             if idle_drivers > 0:
-                assert action in neighbors
-                actionlist = [(action, 1, -self.wc, 1)]
-                unmasked_sum = 0 # asserting that we don't send cars outside the view (action is in neigbors)
+
+                if self.time == 0 and action >= len(neighbors) and action != self.max_action_id:
+                    # for very first action mask is not passed properly in stable_baseline framework
+                    # and all the actions assumed to be feasible
+                    # so we hack it just by assuming that any illegal action means just staying at the same node
+                    action = self.max_action_id
+
+                assert action < len(neighbors) or action == self.max_action_id, \
+                    "Received illegal action-id: {}, neigh {}, max action {}".format(action, neighbors, self.max_action_id)
+                target_node_id = neighbors[action] if action < len(neighbors) else node # last action_id is the node itself
+                actionlist = [(target_node_id, 1, -self.wc, 1)] # action is the id in action_array, i.e. id of neighbor, not a neighbor node_id
+            unmasked_sum = 0 # asserting that we don't send cars outside the view (action is in neigbors)
         else:
             node_degree = len(neighbors)
             missing_dimentions = len(action) - node_degree - 1
@@ -616,7 +634,11 @@ class TaxiEnv(gym.Env):
         node = self.world.nodes[self.current_node_id]['info']
         if self.DEBUG:
             total_cars = np.sum([a[1] for a in dispatch_action_list])    
-            assert total_cars == 1 if self.discrete else node.get_driver_num(), node.get_driver_num()
+            if not self.discrete:
+                assert node.get_driver_num(), (total_cars, node.get_driver_num())
+            else:
+                total_cruising_cars = np.sum([a[1] for a in dispatch_action_list if a[2] <= 0])
+                assert total_cruising_cars <= 1, total_cruising_cars  # the rest are orders 
         drivers = list(node.drivers)
 
         if self.poorest_first:
@@ -861,6 +883,9 @@ class TaxiEnv(gym.Env):
     def get_view_size(self):
         return len(self.full_to_view_ind)
 
+    def get_n_intervals(self):
+        return self.n_intervals
+
     def set_income_bound(self, bound):
         self.income_bound = bound
         for d in self.all_driver_list:
@@ -1019,3 +1044,13 @@ class TaxiEnv(gym.Env):
         max_degree = np.max([d[1] for d in nx.degree(g) if d[0] in self.full_to_view_ind])
         self.set_action_and_observation_space(max_degree, len(self.full_to_view_ind), self.n_intervals)
         self.init()
+
+    def get_reset_info(self) -> Dict:
+        obs, driver_max, order_max = self.get_observation()
+        info = {"served_orders": 0,
+                "driver normalization constant": self.episode_logs["driver normalization constant"], # required for cA2C
+                "order normalization constant": self.episode_logs["order normalization constant"],
+                }
+        if self.include_action_mask:
+            info['action_mask'] = self.get_action_mask()
+        return info

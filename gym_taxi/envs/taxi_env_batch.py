@@ -36,6 +36,7 @@ class TaxiEnvBatch(TaxiEnv):
                  seed: int = 0,
                  penalty_for_invalid_action: float = 1000,
                  driver_automatic_return: bool = True,
+                 discrete: bool = False,
                  debug: bool = True) -> None:
         super(TaxiEnvBatch, self).__init__(world, orders, order_sampling_rate, drivers_per_node,
                                 n_intervals, wc, count_neighbors,
@@ -44,6 +45,7 @@ class TaxiEnvBatch(TaxiEnv):
                                 penalty_for_invalid_action, driver_automatic_return, False, False, debug)
                                 # include_action_mask is false because it is used only by PPO, that uses taxi_env directly
                                 # discrete is False because for testing in gym we use discrete taxi_env directly
+        assert discrete == False # need to be among arguments for compatibility
 
     def set_action_and_observation_space(self, max_degree, world_size, n_intervals):
         super(TaxiEnvBatch, self).set_action_and_observation_space(max_degree, world_size, n_intervals)
@@ -62,13 +64,6 @@ class TaxiEnvBatch(TaxiEnv):
     def reset(self) -> Array[int]:
         obs = super(TaxiEnvBatch, self).reset()
         return self.get_global_observation()
-
-    def get_reset_info(self) -> Dict:
-        obs, driver_max, order_max = self.get_observation()
-        return {"served_orders": 0,
-                "driver normalization constant": self.episode_logs["driver normalization constant"], # required for cA2C
-                "order normalization constant": self.episode_logs["order normalization constant"]
-                }
 
     def get_global_observation(self):
         """
