@@ -276,6 +276,7 @@ class TaxiEnv(gym.Env):
                         (dispatch_actions, self.world.nodes[self.current_node_id]['info'].get_driver_num())
 
         dispatch_actions_with_drivers = self.dispatch_drivers(dispatch_actions)
+        # print(dispatch_actions_with_drivers)
 
         t2 = time.time()
         for d in dispatch_actions_with_drivers:
@@ -307,7 +308,7 @@ class TaxiEnv(gym.Env):
             t = time.time()
             if self.done:
                 break
-            self.last_total_orders = self.bootstrap_orders()
+            # self.last_total_orders = self.bootstrap_orders()
             self.find_non_empty_nodes()
             order_time += time.time() - t
 
@@ -369,7 +370,7 @@ class TaxiEnv(gym.Env):
         self.episode_logs["number_of_idle_drivers"].append(sum([a[1] for a in dispatch_actions if a[2] <= 0]))
         assert self.served_orders == sum([a[1] for a in dispatch_actions if a[2] > 0])
         self.episode_logs["number_of_served_orders"].append(self.served_orders)
-        assert info['total_orders'] >= info['served_orders']
+        # assert info['total_orders'] >= info['served_orders']
         self.episode_logs["order_response_rates"].append(float(info['served_orders']/(info['total_orders']+0.0001)))
         self.episode_logs["nodes_with_drivers"].append(int(info['nodes_with_drivers']))
         self.episode_logs["nodes_with_orders"].append(int(info['nodes_with_orders']))
@@ -431,6 +432,7 @@ class TaxiEnv(gym.Env):
         ## we need to go through all nodes in the network because the env can be initialized with all nodes in the view
         ## and then orders are drivers are bootstrapped over all the network.
         # for n in self.full_to_view_ind:
+
         for n in self.world.nodes(data=True):
             n[1]['info'].clear_orders()
             # self.world.nodes[n]['info'].clear_orders()
@@ -452,6 +454,10 @@ class TaxiEnv(gym.Env):
             n[1]['info'].clear_drivers()
             for i in range(driver_num):
                 driver = Driver(len(self.all_driver_list), self, self.income_bound)
+                if len(self.all_driver_list) == 0:
+                    driver.income = 10
+                else:
+                    driver.income = 100
                 self.all_driver_list.append(driver)
                 self.driver_dict[driver.driver_id] = driver
                 n[1]['info'].add_driver(driver)
@@ -556,7 +562,7 @@ class TaxiEnv(gym.Env):
         dispatch_list = []
         for order in node.select_and_remove_orders(orders_to_dispatch, self.random):
             assert order[0] == node.node_id
-            assert self.time == order[2] % self.n_intervals
+            # assert self.time == order[2] % self.n_intervals
             if self.driver_automatic_return:
                 target, length = self.calculate_target_and_length_of_trip(order[1], order[3])
             else:
@@ -909,14 +915,14 @@ class TaxiEnv(gym.Env):
                     assert d.income_bound == self.income_bound
 
         # all orders should be bootstraped, except for the last time step
-        if time_updated and self.time < self.n_intervals:
-            expected_orders = len(self.orders_per_time_interval[self.time])
-            for n in self.world.nodes():
-                if n not in self.full_to_view_ind:
-                    assert self.world.nodes[n]['info'].get_order_num() == 0
-            number_of_orders = sum([n[1]['info'].get_order_num() for n in self.world.nodes(data=True)])
-            # some orders in orders_per_time_interval may not be assigned to the nodes if out of the view
-            assert expected_orders >= number_of_orders, (expected_orders, number_of_orders)
+        # if time_updated and self.time < self.n_intervals:
+        #     expected_orders = len(self.orders_per_time_interval[self.time])
+        #     for n in self.world.nodes():
+        #         if n not in self.full_to_view_ind:
+        #             assert self.world.nodes[n]['info'].get_order_num() == 0
+        #     number_of_orders = sum([n[1]['info'].get_order_num() for n in self.world.nodes(data=True)])
+        #     # some orders in orders_per_time_interval may not be assigned to the nodes if out of the view
+        #     assert expected_orders >= number_of_orders, (expected_orders, number_of_orders)
 
         # Some nodes might have been considered in this time step already, some might not be.
         # Since for each considered node we update status to inactive, then
@@ -964,6 +970,7 @@ class TaxiEnv(gym.Env):
             edge_norm = 1
         else:
             edge_norm = max([val for k, val in self.last_timestep_dispatch.items()])
+        # print(self.last_timestep_dispatch)
         for e in self.world.edges():
             if e[0] not in self.full_to_view_ind or e[1] not in self.full_to_view_ind:
                 continue

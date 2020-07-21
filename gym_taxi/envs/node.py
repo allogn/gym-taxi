@@ -30,6 +30,7 @@ class Node:
         return len(self.orders)
 
     def select_and_remove_orders(self, number_of_orders, random_state):
+        # orders are <from_node, to_node, 
         assert number_of_orders <= len(self.orders)
         assert number_of_orders >= 0
         if number_of_orders == 0:
