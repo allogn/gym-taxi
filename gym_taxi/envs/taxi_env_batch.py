@@ -36,7 +36,9 @@ class TaxiEnvBatch(TaxiEnv):
                  seed: int = 0,
                  penalty_for_invalid_action: float = 1000,
                  driver_automatic_return: bool = True,
-                 discrete: bool = False,
+                 include_action_mask: bool = False, # this is not used, added for compatibility with TaxiEnv
+                 hold_observation: bool = True, # same
+                 discrete: bool = False, # same
                  debug: bool = True) -> None:
         super(TaxiEnvBatch, self).__init__(world, orders, order_sampling_rate, drivers_per_node,
                                 n_intervals, wc, count_neighbors,
