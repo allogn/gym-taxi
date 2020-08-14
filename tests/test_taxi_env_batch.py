@@ -4,6 +4,7 @@ import os, sys
 import networkx as nx
 import numpy as np
 from gym_taxi.envs.taxi_env_batch import TaxiEnvBatch
+from copy import deepcopy
 
 class TestTaxiEnvBatch:
 
@@ -21,6 +22,7 @@ class TestTaxiEnvBatch:
         action[4] = 1
         action[-1] = 1
         observation, reward, done, info = env.step(action)
+        observation, reward, done, info = env.step(action) # first step is a cold start
 
         assert done == False
         assert env.world.nodes[0]['info'].get_driver_num() == 2
@@ -62,6 +64,7 @@ class TestTaxiEnvBatch:
         assert env.current_node_id in [2,3,4]
 
         obs, rew, done, info = env.step(action)
+        obs, rew, done, info = env.step(action) # first step is a cold start
         assert env.current_node_id in [2,3]
         assert (obs[:view_size] == np.array([0.5,1,0])).all() # 0.5 because action takes into consideration only nodes in view, so there is no left-step from the 2nd (most left) node
         assert (obs[view_size:2*view_size] == np.array([0,0,0])).all()
@@ -71,3 +74,26 @@ class TestTaxiEnvBatch:
         assert (obs[2*view_size:3*view_size] == np.array([0.5,1,0])).all()
         assert (obs[3*view_size:] == np.array([0,1,0,0,0,0,0,0,0,0])).all()
         assert [d.position for d in env.all_driver_list] == [0, 1, 3, 2, 3, 5]
+
+    def test_fully_collaborative(self):
+        g = nx.Graph()
+        g.add_edges_from([(0,1),(1,2),(2,3),(3,4)])
+        nx.set_node_attributes(g, {0: (0,1), 1: (0,2), 2: (0,3), 3: (0,4), 4: (0,5)}, name="coords")
+        orders = [(2,0,10,3,3)] # <source, destination, time, length, price>
+        drivers = np.array([1,0,0,0,1])
+        env = TaxiEnvBatch(g, orders, 1, drivers, 12, \
+                            discrete=True, fully_collaborative=True, include_action_mask=True) # 1 is order sampling rate
+        _, _, _, info = env.step(0)
+
+        # try all possible actions, and check all outcomes
+        mask = info["action_mask"]
+        possible_outcomes = set()
+        for i in range(len(mask)):
+            if mask[i] == 0:
+                continue
+            env2 = deepcopy(env)
+            obs, _, _, _ = env2.step(i)
+            drivers = obs[:5]
+            possible_outcomes.add(tuple(drivers.tolist()))
+
+        assert possible_outcomes == set([(1,0,0,0,1), (0,1,0,0,1), (1,0,0,1,0), (0,1,0,1,0)])

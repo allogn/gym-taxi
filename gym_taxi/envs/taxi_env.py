@@ -161,11 +161,11 @@ class TaxiEnv(gym.Env):
     
     def set_action_and_observation_space(self, max_degree, world_size, n_intervals):
         # set action space
+        self.action_space_shape = (max_degree+1,)
         if self.discrete:
             self.action_space = spaces.Discrete(max_degree+1)
             self.max_action_id = max_degree # starting from 0
         else:
-            self.action_space_shape = (max_degree+1,)
             self.action_space = spaces.Box(low=0, high=1, shape=self.action_space_shape)
 
         # set observation space: distribution of drivers, orders, current cell and current time
@@ -487,7 +487,7 @@ class TaxiEnv(gym.Env):
             reward = reward/np.sum([a[1] for a in dispatch_actions_with_drivers])
         return reward
 
-    def get_dispatch_actions_from_action(self, action) -> ActionList:
+    def get_dispatch_actions_from_action(self, action):
         '''
         Number of dispatch actions should be equal to number of drivers in a cells.
         Dispatch actions may have destination repeated, because of possibly different price.
@@ -639,14 +639,7 @@ class TaxiEnv(gym.Env):
             else:
                 total_cruising_cars = np.sum([a[1] for a in dispatch_action_list if a[2] <= 0])
                 assert total_cruising_cars <= 1, total_cruising_cars  # the rest are orders 
-        drivers = list(node.drivers)
-
-        if self.poorest_first:
-            drivers_with_income = [(d, d.get_income()) for d in drivers]
-            drivers_with_income.sort(key=lambda x: x[1])
-            drivers = [x[0] for x in drivers_with_income]
-        else:
-            self.random.shuffle(drivers)
+        drivers = node.drivers
 
         i = 0
         for a in dispatch_action_list:
@@ -742,8 +735,18 @@ class TaxiEnv(gym.Env):
         while len(self.non_empty_nodes) > 0:
             self.current_node_id = self.non_empty_nodes.pop()
             # can be false positive due to neighbourhood matches
-            if self.world.nodes[self.current_node_id]['info'].get_driver_num() > 0:
+            node = self.world.nodes[self.current_node_id]['info']
+            if node.get_driver_num() > 0:
                 # accept the choice and return a signal that there are non-served nodes
+
+                # sort drivers in the order they will be served (must be well-defined at any time, since it is used in taxi_env_batch)
+                if self.poorest_first:
+                    drivers_with_income = [(d, d.get_income()) for d in node.drivers]
+                    drivers_with_income.sort(key=lambda x: x[1])
+                    node.drivers = [x[0] for x in drivers_with_income]
+                else:
+                    self.random.shuffle(node.drivers)
+
                 return False
         # return that it is time to update the time step
         return True
