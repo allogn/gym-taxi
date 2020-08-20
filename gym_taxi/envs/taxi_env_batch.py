@@ -173,7 +173,11 @@ class TaxiEnvBatch(TaxiEnv):
                 observation_per_cell, reward, done, last_info = super(TaxiEnvBatch, self).step(individual_action)
 
                 reward_per_node[self.full_to_view_ind[cell_id_that_brings_reward]] += reward
-                global_reward += reward
+                if self.minimum_reward:
+                    if global_reward > reward:
+                        global_reward = reward
+                else:
+                    global_reward += reward
                 total_served_orders += last_info['served_orders']
 
                 assert done == self.done
