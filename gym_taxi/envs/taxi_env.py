@@ -47,6 +47,8 @@ class TaxiEnv(gym.Env):
                  driver_automatic_return: bool = True,
                  include_action_mask: bool = False,
                  discrete: bool = False,
+                 bounded_income: bool = False,
+                 waiting_period: int = 1,
                  debug: bool = True) -> None: 
         '''
         :param world: undirected networkx graph that represents spatial cells for drivers to travel
@@ -107,6 +109,7 @@ class TaxiEnv(gym.Env):
         if self.DEBUG:
             logging.warning("DEBUG mode is active for taxi_env")
         self.number_of_resets = 0
+        self.best_income_so_far = 0
 
         # Setting simulator parameters
         super(TaxiEnv, self).__init__()
@@ -140,7 +143,9 @@ class TaxiEnv(gym.Env):
         self.penalty_for_invalid_action = penalty_for_invalid_action
         self.driver_automatic_return = driver_automatic_return
         self.include_action_mask = include_action_mask
+        self.bounded_income = bounded_income
         self.discrete = discrete
+        self.waiting_period = waiting_period
         if discrete:
             assert self.include_action_mask
 
@@ -172,7 +177,10 @@ class TaxiEnv(gym.Env):
         self.observation_space_shape = 4*world_size + n_intervals
         if self.include_income_to_observation:
             # optionally with mean,avg,min incomes
-            self.observation_space_shape += world_size
+            if self.discrete:
+                self.observation_space_shape += self.n_drivers
+            else:
+                self.observation_space_shape += world_size
         self.observation_space_shape = (self.observation_space_shape,)
 
         self.observation_space = spaces.Box(low=0, high=1, shape=self.observation_space_shape)
@@ -215,8 +223,11 @@ class TaxiEnv(gym.Env):
         obs, max_driver, max_order = self.get_observation()
         self.update_episode_logs_once_per_obs_update(max_driver, max_order)
         self.last_time_step_obs = obs
+        if self.bounded_income:
+            self.set_income_bound(self.best_income_so_far)
 
     def reset(self) -> Array[int]:
+        self.auto_update_income_bound()
         self.number_of_resets += 1
         self.init()
         obs, max_driver, max_order = self.get_observation()
@@ -245,7 +256,7 @@ class TaxiEnv(gym.Env):
         if self.discrete:
             assert action >= 0 and action <= self.max_action_id
         else:
-            assert action.shape == self.action_space.shape, (action.shape, self.action_space.shape)
+            assert action.shape == self.action_space_shape, (action.shape, self.action_space_shape)
         
         if self.episode_logs['last_time_step'] == 0:
             assert self.time == 0
@@ -336,7 +347,7 @@ class TaxiEnv(gym.Env):
             # time increased, some drivers must avait for instructions or it is done
             self.check_consistency(time_updated) 
 
-        info['action_mask'] = self.get_action_mask()
+        info['action_mask'] = self.get_action_mask(self.current_node_id)
         info['time_updated'] = time_updated
         
         t6 = time.time()
@@ -344,11 +355,11 @@ class TaxiEnv(gym.Env):
         self.time_profile += np.array([t6-t5, t5-t4, t4-t3, t3-t2, t2-t1])
         return self.last_time_step_obs if self.hold_observation else observation, reward, self.done, info
 
-    def get_action_mask(self):
+    def get_action_mask(self, node_id):
         n = self.max_action_id+1 if self.discrete else self.action_space_shape[0]
         mask = np.ones((n), dtype=int)
         if self.include_action_mask:
-            neighbors = self.get_node_neigbors_in_view(self.current_node_id)
+            neighbors = self.get_node_neigbors_in_view(node_id)
             node_degree = len(neighbors)
             mask[node_degree:-1] = 0
         return mask.tolist()
@@ -431,9 +442,10 @@ class TaxiEnv(gym.Env):
         ## we need to go through all nodes in the network because the env can be initialized with all nodes in the view
         ## and then orders are drivers are bootstrapped over all the network.
         # for n in self.full_to_view_ind:
-        for n in self.world.nodes(data=True):
-            n[1]['info'].clear_orders()
-            # self.world.nodes[n]['info'].clear_orders()
+        if self.time % self.waiting_period == 0:
+            for n in self.world.nodes(data=True):
+                n[1]['info'].clear_orders()
+                # self.world.nodes[n]['info'].clear_orders()
 
         for r in self.orders_per_time_interval[self.time]:
             if r[0] in self.full_to_view_ind:
@@ -496,10 +508,10 @@ class TaxiEnv(gym.Env):
         '''
 
         driver_to_order_list = self.make_order_dispatch_list_and_remove_orders()
+        self.served_orders = len(driver_to_order_list)
         node = self.current_node_id
         idle_drivers = self.world.nodes[node]['info'].get_driver_num() - len(driver_to_order_list)
 
-        self.served_orders = len(driver_to_order_list)
         actionlist = []
 
         neighbors = self.get_node_neigbors_in_view(node)
@@ -514,7 +526,8 @@ class TaxiEnv(gym.Env):
                     action = self.max_action_id
 
                 assert action < len(neighbors) or action == self.max_action_id, \
-                    "Received illegal action-id: {}, neigh {}, max action {}".format(action, neighbors, self.max_action_id)
+                    "Received illegal action-id: {}, neigh {}, max action {}, action_mask {}, cur node {}".format(action, 
+                        neighbors, self.max_action_id, self.get_action_mask(self.current_node_id), self.current_node_id)
                 target_node_id = neighbors[action] if action < len(neighbors) else node # last action_id is the node itself
                 actionlist = [(target_node_id, 1, -self.wc, 1)] # action is the id in action_array, i.e. id of neighbor, not a neighbor node_id
             unmasked_sum = 0 # asserting that we don't send cars outside the view (action is in neigbors)
@@ -824,22 +837,25 @@ class TaxiEnv(gym.Env):
         """
         :returns: a normalized vector of incomes of idle drivers in the whole world
         """
-        view_size = len(self.full_to_view_ind)
-        income = np.zeros(view_size)
-        for n, view_ind in self.full_to_view_ind.items():
-            node = self.world.nodes[n]['info']
-            if self.idle_reward == False:
-                if self.income_bound is not None:
-                    driver_incomes = [max(0,self.income_bound - d.income) for d in node.drivers]
+        if self.discrete:
+            income = np.array([d.income for d in self.all_driver_list])
+        else:
+            view_size = len(self.full_to_view_ind)
+            income = np.zeros(view_size)
+            for n, view_ind in self.full_to_view_ind.items():
+                node = self.world.nodes[n]['info']
+                if self.idle_reward == False:
+                    if self.income_bound is not None:
+                        driver_incomes = [max(0,self.income_bound - d.income) for d in node.drivers]
+                    else:
+                        driver_incomes = [d.income for d in node.drivers]
                 else:
-                    driver_incomes = [d.income for d in node.drivers]
-            else:
-                driver_incomes = [d.get_not_idle_periods() for d in node.drivers]
+                    driver_incomes = [d.get_not_idle_periods() for d in node.drivers]
 
-            if self.poorest_first:
-                driver_incomes = sorted(driver_incomes)[-int(idle_drivers_per_node_in_view[view_ind]):] # idle_drivers_per_node is of a size of view
-                
-            income[view_ind] = 0 if len(driver_incomes) == 0 else np.min(driver_incomes) # alternatively, np.mean. for discrete min is important because it shows who's next to go
+                if self.poorest_first:
+                    driver_incomes = sorted(driver_incomes)[-int(idle_drivers_per_node_in_view[view_ind]):] # idle_drivers_per_node is of a size of view
+                    
+                income[view_ind] = 0 if len(driver_incomes) == 0 else np.min(driver_incomes) # alternatively, np.mean. for discrete min is important because it shows who's next to go
 
         # normalization. Note that income might be negative
         income -= np.min(income)
@@ -1055,5 +1071,12 @@ class TaxiEnv(gym.Env):
                 "order normalization constant": self.episode_logs["order normalization constant"],
                 }
         if self.include_action_mask:
-            info['action_mask'] = self.get_action_mask()
+            info['action_mask'] = self.get_action_mask(self.current_node_id)
         return info
+
+    def auto_update_income_bound(self):
+        if self.bounded_income:
+            b = np.mean([d.income for d in self.all_driver_list])
+            if b > self.best_income_so_far:
+                logging.info("Updated best income to {}".format(b))
+                self.best_income_so_far = b

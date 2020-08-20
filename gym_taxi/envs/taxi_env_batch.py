@@ -40,6 +40,8 @@ class TaxiEnvBatch(TaxiEnv):
                  hold_observation: bool = True,
                  discrete: bool = False,
                  fully_collaborative: bool = False,
+                 bounded_income: bool = False,
+                 waiting_period: int = 1,
                  debug: bool = True) -> None:
         """
         :param fully_collaborative: global actions are defined per each car, not per cell
@@ -51,7 +53,7 @@ class TaxiEnvBatch(TaxiEnv):
                                 weight_poorest, normalize_rewards, minimum_reward, reward_bound,
                                 include_income_to_observation, poorest_first, idle_reward, seed, True, 
                                 penalty_for_invalid_action, driver_automatic_return, include_action_mask, 
-                                discrete, debug)
+                                discrete, bounded_income, waiting_period, debug)
 
 
     def set_action_and_observation_space(self, max_degree, world_size, n_intervals):
@@ -62,15 +64,16 @@ class TaxiEnvBatch(TaxiEnv):
         if self.fully_collaborative:
             # note that the shape is exponential (!!!) in number of drivers
             self.global_action_space_shape = (self.action_space_shape[0]**self.n_drivers,)
+            self.action_space = spaces.Discrete(self.global_action_space_shape[0])
         else:
             self.global_action_space_shape = (self.action_space_shape[0]*world_size,)
-        self.global_action_space = spaces.Box(low=0, high=1, shape=self.global_action_space_shape)
+            self.action_space = spaces.Box(low=0, high=1, shape=self.global_action_space_shape) # not "global"! this var is used by Gym
 
         # current node_id is dropped from observation
         self.global_observation_space_shape = (self.observation_space_shape[0] - world_size,)
-        assert self.global_observation_space_shape[0] == 3*world_size + n_intervals or \
-                    self.global_observation_space_shape[0] == 4*world_size + n_intervals
-        self.global_observation_space = spaces.Box(low=0, high=1, shape=self.global_observation_space_shape)
+        assert self.global_observation_space_shape[0] in [3*world_size + n_intervals, \
+                        4*world_size + n_intervals, 3*world_size + n_intervals + self.n_drivers]
+        self.observation_space = spaces.Box(low=0, high=1, shape=self.global_observation_space_shape)
 
     def reset(self) -> Array[int]:
         self.cool_start = True
@@ -95,7 +98,7 @@ class TaxiEnvBatch(TaxiEnv):
 
     def get_individual_action(self, action):
         if self.fully_collaborative:
-            assert type(action) == int
+            assert type(action) == int or type(action) == np.int64, (action, type(action))
             d = self.world.nodes[self.current_node_id]['info'].drivers
             if len(d) == 0:
                 return None # the rest of the drivers are travelling
@@ -116,16 +119,18 @@ class TaxiEnvBatch(TaxiEnv):
     def get_global_action_mask(self):
         if not self.discrete or not self.fully_collaborative:
             return None
+        assert self.include_action_mask
         n_actions = self.action_space_shape[0]
         tensor_mask_shape = self.get_global_action_mask_shape()
         tensor_mask = np.ones(tensor_mask_shape, dtype=int)
         for a_id in range(self.n_drivers):
-            agent_mask = np.where(self.get_action_mask() == 0) # index ids!
+            node = self.all_driver_list[a_id].position
+            agent_mask = np.where(np.array(self.get_action_mask(node)) == 0) # index ids!
+            # print("agent {}, mask {}, ind {}, pos {}".format(a_id, self.get_action_mask(node), agent_mask, node))
             index = [slice(0,n_actions) for i in range(self.n_drivers)]
             index[a_id] = agent_mask
             index = tuple(index)
             tensor_mask[index] = 0 # we do logical and for all agents, so for each agent_mask=0, the resulting value is also 0
-
         return tensor_mask.flatten()
 
     def step(self, action):
@@ -153,11 +158,15 @@ class TaxiEnvBatch(TaxiEnv):
                                                         if self.world.nodes[n]['info'].get_driver_num() > 0])
                 individual_iterations = cells_with_nonzero_drivers
 
+            start_time = self.time
             for i in range(individual_iterations):
                 individual_action = self.get_individual_action(action)
 
-                if individual_action is None:
+                if individual_action is None or self.time > start_time:
                     # the rest of the drivers are travelling
+
+                    # we don't know what number of cars we need to manage, but if time was updated - then drivers were put back in the nodes
+                    # so we need to stop this iterations
                     break
 
                 cell_id_that_brings_reward = self.current_node_id
@@ -168,7 +177,7 @@ class TaxiEnvBatch(TaxiEnv):
                 total_served_orders += last_info['served_orders']
 
                 assert done == self.done
-                assert i == individual_iterations-1 or self.done == False
+                assert i == individual_iterations-1 or self.done == False or self.time > start_time
 
             assert (not self.done) or (self.time == self.n_intervals)
             assert self.time > init_t # has to be incremented, but might have several steps passed (if no drivers to control/dispatch)
@@ -178,11 +187,11 @@ class TaxiEnvBatch(TaxiEnv):
         global_info = {
             "reward_per_node": reward_per_node,
             "served_orders": total_served_orders,
-            "action_mask": self.get_global_action_mask(),
             "driver normalization constant": self.episode_logs["driver normalization constant"], # required for cA2C
             "order normalization constant": self.episode_logs["order normalization constant"] # required for cA2C
         }
         global_info.update(last_info)
+        global_info["action_mask"] = self.get_global_action_mask()
         return global_observation, global_reward, self.done, global_info
 
     def get_action_space_shape(self):
