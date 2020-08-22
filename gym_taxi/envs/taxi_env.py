@@ -181,6 +181,7 @@ class TaxiEnv(gym.Env):
                 self.observation_space_shape += self.n_drivers
             else:
                 self.observation_space_shape += world_size
+
         self.observation_space_shape = (self.observation_space_shape,)
 
         self.observation_space = spaces.Box(low=0, high=1, shape=self.observation_space_shape)

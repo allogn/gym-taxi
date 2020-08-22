@@ -69,10 +69,13 @@ class TaxiEnvBatch(TaxiEnv):
             self.global_action_space_shape = (self.action_space_shape[0]*world_size,)
             self.action_space = spaces.Box(low=0, high=1, shape=self.global_action_space_shape) # not "global"! this var is used by Gym
 
-        # current node_id is dropped from observation
-        self.global_observation_space_shape = (self.observation_space_shape[0] - world_size,)
+        # current node_id is dropped from observation, and cruising bit per car is added if fully_collaborative
+        if self.fully_collaborative:
+            self.global_observation_space_shape = (self.observation_space_shape[0] - world_size + self.n_drivers,)
+        else:
+            self.global_observation_space_shape = (self.observation_space_shape[0] - world_size,)
         assert self.global_observation_space_shape[0] in [3*world_size + n_intervals, \
-                        4*world_size + n_intervals, 3*world_size + n_intervals + self.n_drivers]
+                        4*world_size + n_intervals, 3*world_size + n_intervals + self.n_drivers, 3*world_size + n_intervals + 2*self.n_drivers]
         self.observation_space = spaces.Box(low=0, high=1, shape=self.global_observation_space_shape)
 
     def reset(self) -> Array[int]:
@@ -92,7 +95,11 @@ class TaxiEnvBatch(TaxiEnv):
         # global_obs is obs without cell_id
         world_size = len(self.full_to_view_ind)
         global_observation[:3*world_size+self.n_intervals] = observation[:3*world_size+self.n_intervals]
-        global_observation[3*world_size+self.n_intervals:] = observation[4*world_size+self.n_intervals:]
+        if self.fully_collaborative:
+            global_observation[3*world_size+self.n_intervals:-self.n_drivers] = observation[4*world_size+self.n_intervals:]
+            global_observation[-self.n_drivers:] = np.array([d.status for d in self.all_driver_list])
+        else:    
+            global_observation[3*world_size+self.n_intervals:] = observation[4*world_size+self.n_intervals:]
         assert (global_observation >= 0).all() and (global_observation <= 1).all()
         return global_observation
 
