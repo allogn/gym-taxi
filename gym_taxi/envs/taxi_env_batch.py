@@ -192,7 +192,8 @@ class TaxiEnvBatch(TaxiEnv):
 
             assert (not self.done) or (self.time == self.n_intervals)
             assert self.time > init_t # has to be incremented, but might have several steps passed (if no drivers to control/dispatch)
-            assert np.abs(np.sum(reward_per_node) - global_reward) < 0.0001
+            if not self.minimum_reward:
+                assert np.abs(np.sum(reward_per_node) - global_reward) < 0.0001
 
         global_observation = self.get_global_observation()
         global_info = {
