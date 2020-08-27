@@ -876,7 +876,7 @@ class TaxiEnv(gym.Env):
         # normalization. Note that income might be negative
         income -= np.min(income)
         if np.sum(income) > 0:
-            income /= np.max(income)
+            income = income / np.max(income)
 
         assert np.min(income) == 0
         assert np.max(income) == 1 or np.sum(income) == 0
