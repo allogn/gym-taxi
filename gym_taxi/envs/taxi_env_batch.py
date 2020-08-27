@@ -42,6 +42,7 @@ class TaxiEnvBatch(TaxiEnv):
                  fully_collaborative: bool = False,
                  bounded_income: bool = False,
                  waiting_period: int = 1,
+                 randomize_drivers: bool = False,
                  debug: bool = True) -> None:
         """
         :param fully_collaborative: global actions are defined per each car, not per cell
@@ -53,7 +54,7 @@ class TaxiEnvBatch(TaxiEnv):
                                 weight_poorest, normalize_rewards, minimum_reward, reward_bound,
                                 include_income_to_observation, poorest_first, idle_reward, seed, True, 
                                 penalty_for_invalid_action, driver_automatic_return, include_action_mask, 
-                                discrete, bounded_income, waiting_period, debug)
+                                discrete, bounded_income, waiting_period, randomize_drivers, debug)
 
 
     def set_action_and_observation_space(self, max_degree, world_size, n_intervals):

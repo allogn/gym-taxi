@@ -49,6 +49,7 @@ class TaxiEnv(gym.Env):
                  discrete: bool = False,
                  bounded_income: bool = False,
                  waiting_period: int = 1,
+                 randomize_drivers: bool = False,
                  debug: bool = True) -> None: 
         '''
         :param world: undirected networkx graph that represents spatial cells for drivers to travel
@@ -80,6 +81,7 @@ class TaxiEnv(gym.Env):
                                         this to true makes the driver to appear in the closest node within view
                                         assuming that it drives back as soon as the customer is delivered
         :param discrete: action space is discrete, applied per each car
+        :param randomize_drivers: drivers have random initial position and income in the beginning of episode
         :param debug: extra consistency checks
 
         Change self.DEBUG to False in __init__() to disable consistency checks per iteration.
@@ -146,6 +148,7 @@ class TaxiEnv(gym.Env):
         self.bounded_income = bounded_income
         self.discrete = discrete
         self.waiting_period = waiting_period
+        self.randomize_drivers = randomize_drivers
         if discrete:
             assert self.include_action_mask
 
@@ -217,7 +220,8 @@ class TaxiEnv(gym.Env):
         updated = not self.update_current_node_id()
         assert updated, "Initial state does not have drivers to manage"
         self.last_timestep_dispatch = {} # container for dispatch actions, used in plotting
-        self.this_timestep_dispatch = {} # extra container so that each time we can plot for t-1, and save for this t
+        self.this_timestep_dispatch = {} # extra container so that each time we can plot for t-1, and save for this for plotting
+        self.overall_timestep_dispatch = {} # this is to plot edge usage over an episode
 
         self.reset_episode_logs()
         self.time_profile = np.zeros(5)
@@ -306,6 +310,8 @@ class TaxiEnv(gym.Env):
         while self.update_current_node_id() and not self.done: # while there is no drivers to manage at current iteration
             self.time += 1
             self.last_timestep_dispatch = self.this_timestep_dispatch
+            for k, val in self.this_timestep_dispatch.items():
+                self.overall_timestep_dispatch[k] = self.overall_timestep_dispatch.get(k,0) + val
             self.this_timestep_dispatch = {}
             time_updated = True
             self.done = self.time == self.n_intervals
@@ -392,7 +398,7 @@ class TaxiEnv(gym.Env):
 
     def get_episode_info(self):
         if self.last_episode_logs is None:
-            logging.error(self.episode_logs)
+            logging.error("No last_episode_logs available, check Gym config per_rollout. Current logs: {}".format(self.episode_logs))
         return self.last_episode_logs
 
     def set_orders_per_time_interval(self, orders: Tuple[int, int, int, int, float]) -> None:
@@ -459,12 +465,21 @@ class TaxiEnv(gym.Env):
         Assign initial distribution of drivers to nodes, in all the world, to preserve consistency.
         """
         self.all_driver_list = []
+
+        if self.randomize_drivers:
+            drivers_per_node_dict = Counter(self.random.choice(len(self.full_to_view_ind), self.n_drivers))
+            drivers_per_node = [drivers_per_node_dict[i] for i in range(len(self.drivers_per_node))]
+        else:
+            drivers_per_node = self.drivers_per_node
+
         for n in self.world.nodes(data=True):
-            driver_num = self.drivers_per_node[n[0]]
+            driver_num = drivers_per_node[n[0]]
             assert driver_num >= 0
             n[1]['info'].clear_drivers()
             for i in range(driver_num):
                 driver = Driver(len(self.all_driver_list), self, self.income_bound)
+                if self.randomize_drivers:
+                    driver.income = np.random.randint(100)
                 self.all_driver_list.append(driver)
                 self.driver_dict[driver.driver_id] = driver
                 n[1]['info'].add_driver(driver)
@@ -947,7 +962,13 @@ class TaxiEnv(gym.Env):
                 # float error added (if negative balance accumulates)
                 assert d.income - (-self.wc*(self.time - d.get_not_idle_periods())) >= -0.00001, "Driver's income is not consistent: {}".format(d)
 
-    def render(self, mode='rgb_array'):
+    def render(self, mode='fig'):
+        if self.time == self.n_intervals-1:
+            return self.render_dispatch(mode, self.overall_timestep_dispatch)
+        else:
+            return self.render_dispatch(mode, self.last_timestep_dispatch)
+
+    def render_dispatch(self, mode, dispatch_info):
         '''
         Return a single image
         A mode where an image is plotted in a popup window is not implemented
@@ -980,15 +1001,15 @@ class TaxiEnv(gym.Env):
         c_border = [cmap(j) for j in c_border]
 
         plt.scatter(x[0,:], x[1,:], c=c, s=200, linewidth=3, edgecolors=c_border, cmap="Reds")
-        if len(self.last_timestep_dispatch) == 0:
+        if len(dispatch_info) == 0:
             edge_norm = 1
         else:
-            edge_norm = max([val for k, val in self.last_timestep_dispatch.items()])
+            edge_norm = max([val for k, val in dispatch_info.items()])
         for e in self.world.edges():
             if e[0] not in self.full_to_view_ind or e[1] not in self.full_to_view_ind:
                 continue
 
-            flow = self.last_timestep_dispatch.get((e[0], e[1]),0) - self.last_timestep_dispatch.get((e[1], e[0]),0)
+            flow = dispatch_info.get((e[0], e[1]),0) - dispatch_info.get((e[1], e[0]),0)
             if flow >= 0:
                 c1 = self.world.nodes[e[0]]['coords']
                 c2 = self.world.nodes[e[1]]['coords']
